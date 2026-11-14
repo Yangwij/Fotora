@@ -1739,13 +1739,6 @@ html:not(.browser-preview)[data-window-controls="macos"] .window-controls {
   border-radius: var(--window-radius) var(--window-radius) 0 0;
 }
 
-/* 全屏查看必须隐藏页面自绘的窗口控件和顶部拖动区，
-   不能只依赖操作系统隐藏任务栏。 */
-html.is-fullscreen .window-controls,
-html.is-fullscreen .window-top-grab {
-  display: none !important;
-}
-
 .window-controls-macos,
 .window-controls-windows {
   display: none;

@@ -31728,11 +31728,7 @@ function fitViewerImageToStage(image = $("#viewerPhoto > img")) {
     image.naturalHeight,
     stage.width,
     stage.height,
-    {
-      allowUpscale:
-        viewerFitEnabled ||
-        document.documentElement.classList.contains("is-fullscreen"),
-    },
+    { allowUpscale: viewerFitEnabled },
   );
   if (!box) return null;
   /* 启用等比适配后显式写出最大展示尺寸；关闭时仍允许大图等比缩小，
@@ -31797,7 +31793,7 @@ function fitViewerVideoToStage(video = $("#viewerStage > video")) {
   video.style.height = `${videoHeight}px`;
   video.style.left = `${box.left - crop.x * videoWidth}px`;
   video.style.top = `${box.top - crop.y * videoHeight}px`;
-  video.style.objectFit = hasClientCrop ? "fill" : "contain";
+  video.style.objectFit = "fill";
   video.style.clipPath = hasClientCrop
     ? `inset(${crop.y * 100}% ${(1 - crop.x - crop.w) * 100}% ` +
       `${(1 - crop.y - crop.h) * 100}% ${crop.x * 100}%)`
@@ -38482,67 +38478,37 @@ document.addEventListener(
   true,
 );
 
-let viewerFullscreenPending = false;
-
-async function toggleViewerFullscreen() {
-  if (viewerFullscreenPending) return false;
-  viewerFullscreenPending = true;
-  /* 先回到完整画面的等比尺寸；进入全屏后用户仍可继续手动缩放。 */
-  resetViewerZoom();
-  const wasFullscreen =
-    document.documentElement.classList.contains("is-fullscreen");
-  document.dispatchEvent(new CustomEvent("album:fullscreen-will-change"));
-  let fullscreen = wasFullscreen;
-  try {
-    if (window.albumWindow?.toggleFullscreen) {
-      const result = await window.albumWindow.toggleFullscreen();
-      fullscreen = Boolean(result && result.fullscreen);
-    } else {
-      await toggleAppWindow();
-      fullscreen = document.documentElement.classList.contains("is-fullscreen");
-    }
-    document.documentElement.classList.toggle("is-fullscreen", fullscreen);
-  } finally {
-    document.dispatchEvent(
-      new CustomEvent("album:fullscreen-changed", {
-        detail: { fullscreen },
-      }),
-    );
-    viewerFullscreenPending = false;
-  }
-  return fullscreen;
-}
-
 function handleViewerKey(e, target) {
   const key = e.key;
   const video = $("#viewerStage video");
 
-  /* Esc 是查看器的退出键，即使焦点停在视频进度条或控制按钮上，
-     也不能被浏览器解释成焦点操作。 */
-  if (key === "Escape") {
-    e.preventDefault();
-    if (viewerDateOpen) {
+  if (target instanceof Element && target.closest("#videoControls")) return;
+
+  /* 时间卡片自己会处理滚轮和回车；其余按键不能穿透去翻照片。 */
+  if (viewerDateOpen) {
+    if (key === "Escape") {
+      e.preventDefault();
       closeViewerDate();
-    } else if (viewerInfoOpen) {
-      closeViewerInfo({ immediate: true, restoreFocus: true });
-    } else if ($("#viewer").classList.contains("show-info")) {
-      setViewerInfo(false);
-    } else {
-      closeViewerWithBackgroundAnimation();
+      return;
     }
     return;
   }
 
-  /* 时间卡片自己会处理滚轮和回车；其余按键不能穿透去翻照片。 */
-  if (viewerDateOpen) {
-    return;
-  }
-
   if (viewerInfoOpen) {
+    if (key === "Escape") {
+      e.preventDefault();
+      closeViewerInfo({ immediate: true, restoreFocus: true });
+      return;
+    }
     return;
   }
 
   if (photoWallCropSession) {
+    if (key === "Escape") {
+      e.preventDefault();
+      closeViewer();
+      return;
+    }
     if (
       (key === "ArrowLeft" || key === "ArrowRight") &&
       !photoWallCropConfirmed
@@ -38556,18 +38522,17 @@ function handleViewerKey(e, target) {
     }
   }
 
-  if (
-    (key === "q" || key === "Q") &&
-    !e.repeat &&
-    !e.ctrlKey &&
-    !e.metaKey &&
-    !e.altKey
-  ) {
+  if (key === "Escape") {
     e.preventDefault();
-    void toggleViewerFullscreen();
+    /* 信息面板开着的时候先收面板，再按一次才退出查看器 */
+    if ($("#viewer").classList.contains("show-info")) {
+      setViewerInfo(false);
+    } else {
+      /* 与点击查看器空白处共用同一条带动画退出路径。 */
+      closeViewerWithBackgroundAnimation();
+    }
     return;
   }
-  if (target instanceof Element && target.closest("#videoControls")) return;
   if (
     state.ratingMode &&
     !photoWallCropSession &&
