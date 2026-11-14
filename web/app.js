@@ -38478,37 +38478,65 @@ document.addEventListener(
   true,
 );
 
+let viewerFullscreenPending = false;
+
+async function toggleViewerFullscreen() {
+  if (viewerFullscreenPending) return false;
+  viewerFullscreenPending = true;
+  const wasFullscreen =
+    document.documentElement.classList.contains("is-fullscreen");
+  document.dispatchEvent(new CustomEvent("album:fullscreen-will-change"));
+  let fullscreen = wasFullscreen;
+  try {
+    if (window.albumWindow?.toggleFullscreen) {
+      const result = await window.albumWindow.toggleFullscreen();
+      fullscreen = Boolean(result && result.fullscreen);
+    } else {
+      await toggleAppWindow();
+      fullscreen = document.documentElement.classList.contains("is-fullscreen");
+    }
+    document.documentElement.classList.toggle("is-fullscreen", fullscreen);
+  } finally {
+    document.dispatchEvent(
+      new CustomEvent("album:fullscreen-changed", {
+        detail: { fullscreen },
+      }),
+    );
+    viewerFullscreenPending = false;
+  }
+  return fullscreen;
+}
+
 function handleViewerKey(e, target) {
   const key = e.key;
   const video = $("#viewerStage video");
 
-  if (target instanceof Element && target.closest("#videoControls")) return;
+  /* Esc 是查看器的退出键，即使焦点停在视频进度条或控制按钮上，
+     也不能被浏览器解释成焦点操作。 */
+  if (key === "Escape") {
+    e.preventDefault();
+    if (viewerDateOpen) {
+      closeViewerDate();
+    } else if (viewerInfoOpen) {
+      closeViewerInfo({ immediate: true, restoreFocus: true });
+    } else if ($("#viewer").classList.contains("show-info")) {
+      setViewerInfo(false);
+    } else {
+      closeViewerWithBackgroundAnimation();
+    }
+    return;
+  }
 
   /* 时间卡片自己会处理滚轮和回车；其余按键不能穿透去翻照片。 */
   if (viewerDateOpen) {
-    if (key === "Escape") {
-      e.preventDefault();
-      closeViewerDate();
-      return;
-    }
     return;
   }
 
   if (viewerInfoOpen) {
-    if (key === "Escape") {
-      e.preventDefault();
-      closeViewerInfo({ immediate: true, restoreFocus: true });
-      return;
-    }
     return;
   }
 
   if (photoWallCropSession) {
-    if (key === "Escape") {
-      e.preventDefault();
-      closeViewer();
-      return;
-    }
     if (
       (key === "ArrowLeft" || key === "ArrowRight") &&
       !photoWallCropConfirmed
@@ -38522,17 +38550,18 @@ function handleViewerKey(e, target) {
     }
   }
 
-  if (key === "Escape") {
+  if (
+    (key === "q" || key === "Q") &&
+    !e.repeat &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey
+  ) {
     e.preventDefault();
-    /* 信息面板开着的时候先收面板，再按一次才退出查看器 */
-    if ($("#viewer").classList.contains("show-info")) {
-      setViewerInfo(false);
-    } else {
-      /* 与点击查看器空白处共用同一条带动画退出路径。 */
-      closeViewerWithBackgroundAnimation();
-    }
+    void toggleViewerFullscreen();
     return;
   }
+  if (target instanceof Element && target.closest("#videoControls")) return;
   if (
     state.ratingMode &&
     !photoWallCropSession &&
