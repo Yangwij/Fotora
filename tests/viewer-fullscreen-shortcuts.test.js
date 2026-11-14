@@ -8,6 +8,7 @@ const test = require("node:test");
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 const html = fs.readFileSync(path.join(root, "web", "index.html"), "utf8");
+const css = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
 
 test("查看器中 Q 在普通窗口和全屏之间切换", () => {
   const toggle = app.slice(
@@ -41,6 +42,13 @@ test("查看器全屏按原始比例完整适配而不是裁剪铺满", () => {
   assert.match(
     videoFit,
     /video\.style\.objectFit = hasClientCrop \? "fill" : "contain"/,
+  );
+});
+
+test("查看器全屏隐藏窗口控件和顶部拖动区", () => {
+  assert.match(
+    css,
+    /html\.is-fullscreen \.window-controls,\s*html\.is-fullscreen \.window-top-grab\s*\{\s*display:\s*none !important;/,
   );
 });
 
