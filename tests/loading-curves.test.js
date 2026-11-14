@@ -200,7 +200,7 @@ test("加载曲线速度、动态效果降级与空图库慢速节奏已定义",
   );
   assert.match(
     css,
-    /html\.no-root-directory \.empty-state\.welcome\s*\{\s*transform:\s*none;/,
+    /html\.no-root-directory \.empty-state\.welcome\s*\{[\s\S]*inset:\s*0;[\s\S]*display:\s*grid;[\s\S]*place-content:\s*center;[\s\S]*place-items:\s*center;[\s\S]*transform:\s*none;/,
   );
   assert.match(
     css,

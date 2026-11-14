@@ -7019,6 +7019,14 @@ html:not(.sidebar-rail-is-collapsed) .empty-state.welcome {
   transform: translateX(calc(var(--sidebar-visible-width) / 2));
 }
 html.no-root-directory .empty-state.welcome {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  display: grid;
+  place-content: center;
+  place-items: center;
   transform: none;
 }
 @media (prefers-reduced-motion: reduce) {
