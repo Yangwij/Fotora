@@ -267,6 +267,11 @@ function We(e) {
 function C(e) {
   window.parent.postMessage(e, window.location.origin);
 }
+function masonryFallbackUrl(e, t) {
+  return e?.kind === `photo`
+    ? `/api/thumb/${encodeURIComponent(e.id)}?size=${t}&fit=inside`
+    : ``;
+}
 function Ge(e) {
   let t = Number(e?.focusSpan);
   return t === 2 || t === 3
@@ -382,6 +387,10 @@ function Je({
         top: `calc(${e.y}px - var(--pw-camera-gap-extra, 0px))`,
         width: `calc(${e.width}px + var(--pw-camera-gap-extra, 0px) + var(--pw-camera-gap-extra, 0px))`,
         height: `calc(${e.height}px + var(--pw-camera-gap-extra, 0px) + var(--pw-camera-gap-extra, 0px))`,
+        backgroundImage: u ? `url(${JSON.stringify(u)})` : undefined,
+        backgroundPosition: `center`,
+        backgroundRepeat: `no-repeat`,
+        backgroundSize: `cover`,
         zIndex: r ? 20 : b ? 0 : 1,
       },
       onClick: (t) => {
@@ -403,9 +412,17 @@ function Je({
               (e.currentTarget.classList.remove(`is-failed`),
                 e.currentTarget.classList.add(`is-loaded`));
             },
-            onError: (e) => {
-              (e.currentTarget.classList.remove(`is-loaded`),
-                e.currentTarget.classList.add(`is-failed`));
+            onError: (event) => {
+              let t = event.currentTarget,
+                n = masonryFallbackUrl(e.item, 900);
+              if (n && t.dataset.fallback !== `thumb`) {
+                (t.classList.remove(`is-failed`),
+                  (t.dataset.fallback = `thumb`),
+                  (t.parentElement.style.backgroundImage = `url(${JSON.stringify(n)})`),
+                  (t.src = n));
+                return;
+              }
+              (t.classList.remove(`is-loaded`), t.classList.add(`is-failed`));
             },
           },
           l,
@@ -424,7 +441,17 @@ function Je({
             (e.currentTarget.classList.remove(`is-failed`),
               e.currentTarget.classList.add(`is-loaded`));
           },
-          onError: (e) => e.currentTarget.classList.add(`is-failed`),
+          onError: (event) => {
+            let t = event.currentTarget,
+              n = masonryFallbackUrl(e.item, 180);
+            if (n && t.dataset.fallback !== `thumb`) {
+              ((t.dataset.fallback = `thumb`),
+                (t.parentElement.style.backgroundImage = `url(${JSON.stringify(n)})`),
+                (t.src = n));
+              return;
+            }
+            t.classList.add(`is-failed`);
+          },
         }),
         ee &&
           (0, p.jsx)(
@@ -1026,8 +1053,7 @@ function Ye() {
         }
         finishFlip();
         lt.current = lt.current.filter(
-          (item) =>
-            !flipAnimations.some(({ animation }) => animation === item),
+          (item) => !flipAnimations.some(({ animation }) => animation === item),
         );
       })
       .catch(finishFlip);
@@ -1066,9 +1092,7 @@ function Ye() {
     }
     if (!e || W) {
       if (W && focusCamera) {
-        ((A.current.x = focusCamera.x),
-          (A.current.y = focusCamera.y),
-          G());
+        ((A.current.x = focusCamera.x), (A.current.y = focusCamera.y), G());
       }
       return;
     }
@@ -1286,8 +1310,7 @@ function Ye() {
         ((A.current.x = currentX + (targetX - currentX) * eased),
           (A.current.y = currentY + (targetY - currentY) * eased),
           G(!0, !0),
-          (frame =
-            progress < 1 ? requestAnimationFrame(step) : 0));
+          (frame = progress < 1 ? requestAnimationFrame(step) : 0));
       };
     frame = requestAnimationFrame(step);
     return () => {
@@ -1297,14 +1320,11 @@ function Ye() {
   }, [T, w, n.height, n.width, G, W]);
   let zt = (0, f.useCallback)(() => {
       if (
-        (st.current &&=
+        ((st.current &&=
           (window.clearTimeout(ot.current), (ot.current = 0), !1)),
-        I.current
+        I.current)
       ) {
-        (At(!1),
-          C(
-            { type: `photo-wall:exit` },
-          ));
+        (At(!1), C({ type: `photo-wall:exit` }));
         return;
       }
       P.current
@@ -1470,9 +1490,12 @@ function Ye() {
             ((e.style.opacity = `0`),
               (e.style.transform = `translate3d(0, -68px, 0) scale(${c})`));
           /* 小相册等到可见图片真正可绘制；大相册仍限制在 80ms。 */
-          (await i(t.map(({ node: e }) => e), {
-            timeoutMs: 4000,
-          }),
+          (await i(
+            t.map(({ node: e }) => e),
+            {
+              timeoutMs: 4000,
+            },
+          ),
             await new Promise((e) =>
               requestAnimationFrame(() => requestAnimationFrame(e)),
             ),
@@ -2065,9 +2088,9 @@ function Ye() {
         if (!f.has(e.key) && (d.push(e), f.add(e.key), d.length >= ie)) break;
       let p = qe(k.current, T, n.height),
         v = d.map((e) => {
-        let t = p.rects.get(e.key);
-        return t ? { ...e, ...t } : e;
-      });
+          let t = p.rects.get(e.key);
+          return t ? { ...e, ...t } : e;
+        });
       return { cards: v, backdrop: T ? l : [] };
     }, [T, g, n.height, n.width]);
   return e

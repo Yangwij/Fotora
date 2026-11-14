@@ -186,7 +186,7 @@
       .settings-dialog {
         position: relative;
         display: flex;
-        width: min(900px, calc(100vw - 44px));
+        width: min(720px, calc(100vw - 44px));
         height: min(608px, calc(100vh - 44px));
         min-height: 529px;
         overflow: hidden;
@@ -1094,6 +1094,18 @@
                     ["system", "跟随系统"],
                     ["light", "浅色"],
                     ["dark", "深色"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "windowControls",
+                  label: "窗口控件",
+                  description: "选择窗口控制按钮的位置和样式。",
+                  value: "windows",
+                  options: [
+                    ["windows", "Windows"],
+                    ["macos", "红绿灯"],
+                    ["hidden", "隐藏"],
                   ],
                 },
                 {

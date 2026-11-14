@@ -12,6 +12,10 @@ const settingsDialog = fs.readFileSync(
   path.join(root, "web", "settings-dialog.js"),
   "utf8",
 );
+const settingsDialogCss = fs.readFileSync(
+  path.join(root, "web", "settings-dialog.css"),
+  "utf8",
+);
 const server = fs.readFileSync(path.join(root, "server", "index.js"), "utf8");
 
 test("设置菜单以快捷键分类替代维护分类", () => {
@@ -71,9 +75,44 @@ test("设置弹窗使用独立地图来源、地图类型和照片栏状态", ()
   assert.match(app, /const SHOW_LOCATION_MAP_FILMSTRIP_KEY/);
 });
 
-test("设置中不提供窗口控件位置选项", () => {
-  assert.doesNotMatch(settingsDialog, /窗口控件位置/);
-  assert.doesNotMatch(app, /id:\s*"windowControls"/);
+test("窗口控件位于主题颜色下方并支持三种模式", () => {
+  assert.match(
+    settingsDialog,
+    /key:\s*"colorMode"[\s\S]*?key:\s*"windowControlsStyle"[\s\S]*?\["windows",\s*"Windows"\][\s\S]*?\["macos",\s*"红绿灯"\][\s\S]*?\["hidden",\s*"隐藏"\]/,
+  );
+  assert.match(app, /id:\s*"windowControls"[\s\S]*?label:\s*"窗口控件"/);
+});
+
+test("窗口控件默认使用 Windows 模式", () => {
+  assert.match(
+    app,
+    /function normalizeWindowControlsStyle\(value\)[\s\S]*?:\s*"windows";/,
+  );
+});
+
+test("设置分段按钮使用固定等宽列，选中时不会触发整排跳动", () => {
+  assert.match(
+    settingsDialogCss,
+    /\.ux-settings-segmented\s*{[\s\S]*?width:\s*268px;[\s\S]*?max-width:\s*100%;[\s\S]*?grid-auto-columns:\s*minmax\(0,\s*1fr\);/,
+  );
+});
+
+test("白色选中滑块按等分列百分比定位，避免取整后错位", () => {
+  assert.match(
+    settingsDialog,
+    /--ux-segment-count:\$\{options\.length\};--ux-segment-index:\$\{activeIndex\}/,
+  );
+  assert.match(
+    settingsDialogCss,
+    /\.ux-settings-segment-thumb\s*{[\s\S]*?left:\s*2px;[\s\S]*?width:\s*calc\(\(100% - 4px\) \/ var\(--ux-segment-count,\s*1\)\);[\s\S]*?translateX\(calc\(var\(--ux-segment-index,\s*0\) \* 100%\)\)/,
+  );
+});
+
+test("设置弹窗横向收紧，减少右侧内容区留白", () => {
+  assert.match(
+    settingsDialogCss,
+    /\.ux-settings-dialog\s*{[\s\S]*?width:\s*min\(720px,\s*calc\(100vw - 44px\)\);/,
+  );
 });
 
 test("设置弹窗保留分段滑块和左侧分类的选择动效", () => {

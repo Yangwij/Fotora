@@ -29,6 +29,16 @@
               ],
             },
             {
+              type: "segmented",
+              key: "windowControlsStyle",
+              label: "窗口控件",
+              options: [
+                ["windows", "Windows"],
+                ["macos", "红绿灯"],
+                ["hidden", "隐藏"],
+              ],
+            },
+            {
               type: "titlebar",
               label: "标题栏样式",
               options: [
@@ -435,10 +445,15 @@
           : row.type === "map-type"
             ? row.options
             : row.options || [];
+    const activeIndex = Math.max(
+      0,
+      options.findIndex(([optionValue]) => optionValue === current),
+    );
     return `<div class="ux-settings-row">
       <span class="ux-settings-row-label">${escapeDialogHTML(row.label)}</span>
       <div class="ux-settings-segmented" role="radiogroup"
-        aria-label="${escapeDialogHTML(row.label)}">
+        aria-label="${escapeDialogHTML(row.label)}"
+        style="--ux-segment-count:${options.length};--ux-segment-index:${activeIndex}">
         <span class="ux-settings-segment-thumb" aria-hidden="true"></span>
         ${options
           .map(
@@ -498,9 +513,16 @@
       const thumb = segmented.querySelector(".ux-settings-segment-thumb");
       const active = segmented.querySelector('[aria-checked="true"]');
       if (!thumb || !active) continue;
+      const choices = [...segmented.querySelectorAll("[data-ux-value]")];
       if (!animate) thumb.style.transition = "none";
-      thumb.style.width = `${active.offsetWidth}px`;
-      thumb.style.transform = `translateX(${active.offsetLeft}px)`;
+      segmented.style.setProperty(
+        "--ux-segment-count",
+        String(Math.max(1, choices.length)),
+      );
+      segmented.style.setProperty(
+        "--ux-segment-index",
+        String(Math.max(0, choices.indexOf(active))),
+      );
       if (!animate) {
         requestAnimationFrame(() => thumb.style.removeProperty("transition"));
       }

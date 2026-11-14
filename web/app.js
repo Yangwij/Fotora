@@ -1074,6 +1074,12 @@ const SETTINGS_REGION_GROUPS = Object.freeze([
         inline: true,
       }),
       Object.freeze({
+        id: "windowControls",
+        label: "窗口控件",
+        submenu: "windowControls",
+        inline: true,
+      }),
+      Object.freeze({
         id: "thumbnailCorners",
         label: "缩略图边角",
         submenu: "thumbnailCorners",

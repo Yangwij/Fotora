@@ -214,6 +214,10 @@ html[data-window-controls="macos"] {
   box-sizing: border-box;
 }
 
+:focus-visible {
+  outline-color: var(--accent);
+}
+
 html,
 body {
   height: 100%;
@@ -1583,6 +1587,8 @@ html.trash-hover-only
   flex-direction: column;
   background: var(--main-bg);
   position: relative;
+  /* 标题栏是浮层；内容可以滚到它下方，但任何照片都不能越过主区域上沿。 */
+  overflow: hidden;
 }
 
 .toolbar {
@@ -2125,6 +2131,26 @@ html.blur-titlebar:not(.transparent-titlebar) .toolbar {
   border-bottom: 0.5px solid color-mix(in srgb, var(--sep) 76%, transparent);
   border-radius: 0;
   box-shadow: none;
+}
+
+/* 隐藏窗口控件时，标题栏上缘与内容裁切线重合会留下 1px 接缝；
+   只把浮层标题栏向上压 1px，不改变内容区布局。 */
+html[data-window-controls="hidden"].blur-titlebar:not(.transparent-titlebar)
+  .toolbar {
+  top: calc(var(--toolbar-offset-y) - 1px);
+}
+
+/* 模糊标题栏浮在内容上方时，照片仍可滚到工具栏下方，
+   但顶部窗框留白必须遮住内容，避免照片边缘从标题栏上沿露出。 */
+html.blur-titlebar:not(.transparent-titlebar) .main::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 4;
+  height: var(--toolbar-offset-y);
+  max-height: 100%;
+  pointer-events: none;
+  background: var(--window-frame-bg);
 }
 
 html.blur-titlebar:not(.transparent-titlebar) .content {
@@ -7409,8 +7435,8 @@ html.blur-titlebar .picker-sheet {
 /* The album/main menu itself steps back while a child option card comes
    forward. Scale the whole parent surface, not only its text rows. */
 #popMenu.is-album-options {
-  transition:
-    transform var(--menu-submenu-open-duration) var(--menu-motion-ease);
+  transition: transform var(--menu-submenu-open-duration)
+    var(--menu-motion-ease);
 }
 #popMenu.is-album-options.has-submenu-expanded {
   transform: scale(0.98);
@@ -10239,8 +10265,7 @@ html.transparent-titlebar #content.location-grid-view {
     transform var(--menu-motion-duration) var(--menu-motion-ease),
     background-color 0s linear;
 }
-#popMenu.is-album-options.has-submenu-expanded
-  .menu-submenu-group.is-expanded {
+#popMenu.is-album-options.has-submenu-expanded .menu-submenu-group.is-expanded {
   transform: scale(1.0408163265);
 }
 @media (prefers-reduced-motion: reduce) {

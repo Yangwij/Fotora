@@ -5,7 +5,7 @@
   --pe-muted: rgba(244, 244, 244, 0.56);
   --pe-line: rgba(255, 255, 255, 0.18);
   --pe-panel: rgba(28, 28, 31, 0.94);
-  --pe-active: #ffd60a;
+  --pe-active: #0a84ff;
   /* 右侧参数列只在标题区下方使用可用高度，避免窗口控制带出现时顶到按钮。 */
   --pe-rail-available: max(
     260px,
@@ -99,7 +99,7 @@
   white-space: nowrap;
 }
 .pe-reset-crop:hover {
-  color: #ffd60a;
+  color: var(--pe-active);
 }
 .pe-reset-crop:disabled {
   color: rgba(255, 255, 255, 0.3);
@@ -168,9 +168,9 @@
   background: rgba(255, 255, 255, 0.13);
 }
 .pe-header .pe-video-cover-button.is-active {
-  border-color: rgba(255, 214, 10, 0.34);
+  border-color: rgba(10, 132, 255, 0.34);
   color: var(--pe-active);
-  background: rgba(255, 214, 10, 0.1);
+  background: rgba(10, 132, 255, 0.1);
 }
 .pe-header .pe-video-cover-button[hidden] {
   display: none;
@@ -298,7 +298,7 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
 }
 .pe-video-seek:focus-visible {
-  outline: 1px solid rgba(255, 214, 10, 0.8);
+  outline: 1px solid rgba(10, 132, 255, 0.9);
   outline-offset: 3px;
   border-radius: 4px;
 }
@@ -582,10 +582,10 @@
 .pe-crop-frame {
   position: absolute;
   box-sizing: border-box;
-  border: 2px solid #ffd60a;
+  border: 2px solid var(--pe-active);
   box-shadow:
     0 0 0 0.5px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(255, 214, 10, 0.16);
+    0 0 0 1px rgba(10, 132, 255, 0.16);
   cursor: move;
   pointer-events: auto;
   touch-action: none;
@@ -644,7 +644,7 @@
   width: 10px;
   height: 10px;
   box-sizing: border-box;
-  border: 2px solid #ffd60a;
+  border: 2px solid var(--pe-active);
   border-radius: 2px;
   background: rgba(0, 0, 0, 0.38);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
@@ -660,7 +660,7 @@
   height: 4px;
   border: 0;
   border-radius: 999px;
-  background: #ffd60a;
+  background: var(--pe-active);
 }
 .pe-handle.is-e::before,
 .pe-handle.is-w::before {
@@ -668,7 +668,7 @@
   height: 24px;
   border: 0;
   border-radius: 999px;
-  background: #ffd60a;
+  background: var(--pe-active);
 }
 .pe-handle:hover::before,
 .pe-handle:focus-visible::before {
