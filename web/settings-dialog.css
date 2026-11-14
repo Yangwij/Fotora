@@ -1,0 +1,394 @@
+/* 设置弹窗：沿用预览稿的双栏结构和分组卡片，实际状态仍由 app.js 保存。 */
+.ux-settings-layer {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(12, 12, 15, 0.34);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.ux-settings-layer[hidden] {
+  display: none;
+}
+
+.ux-settings-dialog {
+  display: flex;
+  width: min(900px, calc(100vw - 44px));
+  height: min(608px, calc(100vh - 44px));
+  min-height: 529px;
+  overflow: hidden;
+  border: 0.5px solid var(--sep);
+  border-radius: 24px;
+  background: var(--main-bg);
+  box-shadow:
+    0 32px 90px rgba(0, 0, 0, 0.3),
+    0 10px 28px rgba(0, 0, 0, 0.16);
+}
+
+.ux-settings-nav {
+  display: flex;
+  width: 184px;
+  flex: 0 0 184px;
+  flex-direction: column;
+  padding: 14px 12px;
+  background: color-mix(in srgb, var(--main-bg) 86%, var(--text) 6%);
+  border-right: 0.5px solid var(--sep);
+}
+
+.ux-settings-nav-head {
+  display: grid;
+  min-height: 28px;
+  padding: 0 4px 0 8px;
+  grid-template-columns: 27px minmax(0, 1fr) 27px;
+  align-items: center;
+  gap: 10px;
+}
+
+.ux-settings-confirm,
+.ux-settings-shortcut-open {
+  appearance: none;
+  display: grid;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--field-bg);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.ux-settings-confirm {
+  position: relative;
+}
+
+.ux-settings-confirm::after {
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 5px 16px color-mix(in srgb, var(--accent) 36%, transparent);
+  opacity: 0;
+  content: "";
+  pointer-events: none;
+  transition: opacity 130ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ux-settings-confirm:hover {
+    color: var(--accent);
+    background: var(--accent-hover);
+  }
+
+  .ux-settings-confirm:hover::after {
+    opacity: 1;
+  }
+}
+
+.ux-settings-confirm:active {
+  transform: scale(0.92);
+}
+
+.ux-settings-confirm svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ux-settings-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ux-settings-nav-list {
+  position: relative;
+  display: grid;
+  margin-top: 17px;
+  gap: 2px;
+}
+
+.ux-settings-nav-indicator {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 42px;
+  border: 0.5px solid color-mix(in srgb, var(--text) 6%, transparent);
+  border-radius: 12px;
+  background: var(--hover);
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.06),
+    inset 0 1px rgba(255, 255, 255, 0.34);
+  transform: translateY(0);
+  transition: transform 230ms var(--ease-in-out);
+  pointer-events: none;
+}
+
+.ux-settings-nav-item {
+  appearance: none;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 42px;
+  align-items: center;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ux-settings-nav-item:hover,
+.ux-settings-nav-item:focus-visible {
+  outline: none;
+  background: var(--hover);
+}
+
+.ux-settings-nav-item[aria-selected="true"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ux-settings-main {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  padding: 16px 20px;
+  scrollbar-width: none;
+}
+
+.ux-settings-main::-webkit-scrollbar {
+  display: none;
+}
+
+.ux-settings-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.ux-settings-group {
+  overflow: hidden;
+  border: 0.5px solid var(--sep);
+  border-radius: 18px;
+  background: var(--card-bg, var(--main-bg));
+}
+
+.ux-settings-group-title {
+  min-height: 38px;
+  margin: 0;
+  padding: 11px 14px 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.015em;
+}
+
+.ux-settings-row {
+  display: grid;
+  min-height: 42px;
+  padding: 7px 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  border-top: 0.5px solid var(--sep);
+}
+
+.ux-settings-row-label {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.ux-settings-segmented {
+  position: relative;
+  display: grid;
+  min-width: 176px;
+  padding: 2px;
+  border: 0.5px solid var(--sep);
+  border-radius: 999px;
+  background: var(--field-bg);
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  isolation: isolate;
+}
+
+.ux-settings-segment-thumb {
+  position: absolute;
+  z-index: 0;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: 999px;
+  background: var(--card-bg, var(--main-bg));
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.11),
+    inset 0 1px rgba(255, 255, 255, 0.3);
+  transform: translateX(0);
+  transition: transform var(--menu-motion-duration, 210ms) var(--ease-in-out);
+  pointer-events: none;
+}
+
+.ux-settings-segment {
+  appearance: none;
+  position: relative;
+  z-index: 1;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 130ms ease;
+}
+
+.ux-settings-segment:hover,
+.ux-settings-segment:focus-visible {
+  outline: none;
+  color: var(--text);
+}
+
+.ux-settings-segment[aria-checked="true"] {
+  color: var(--text);
+  font-weight: 600;
+  background: transparent;
+}
+
+.ux-settings-toggle {
+  appearance: none;
+  position: relative;
+  width: 36px;
+  height: 21px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 22%, transparent);
+  cursor: pointer;
+  transition: background-color 170ms ease;
+}
+
+.ux-settings-toggle::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  content: "";
+  transition: transform 170ms ease;
+}
+
+.ux-settings-toggle[aria-checked="true"] {
+  background: var(--accent);
+}
+
+.ux-settings-toggle[aria-checked="true"]::after {
+  transform: translateX(15px);
+}
+
+.ux-settings-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ux-settings-empty {
+  display: grid;
+  min-height: 320px;
+  place-items: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.ux-settings-shortcuts {
+  display: grid;
+  gap: 18px;
+}
+
+.ux-settings-shortcuts .shortcuts-group {
+  padding: 10px 14px;
+  border: 0.5px solid var(--sep);
+  border-radius: 16px;
+  background: var(--card-bg, var(--main-bg));
+}
+
+.ux-settings-shortcuts .shortcuts-group h3 {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 760px) {
+  .ux-settings-layer {
+    padding: 10px;
+  }
+
+  .ux-settings-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .ux-settings-nav {
+    width: 100%;
+    flex: 0 0 auto;
+    border-right: 0;
+    border-bottom: 0.5px solid var(--sep);
+  }
+
+  .ux-settings-nav-list {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .ux-settings-nav-item {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .ux-settings-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .ux-settings-segmented {
+    width: 100%;
+  }
+
+  .ux-settings-toggle {
+    justify-self: end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ux-settings-nav-indicator,
+  .ux-settings-segment-thumb,
+  .ux-settings-toggle,
+  .ux-settings-toggle::after,
+  .ux-settings-confirm::after {
+    transition: none;
+  }
+}

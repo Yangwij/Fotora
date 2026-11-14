@@ -1,0 +1,2184 @@
+<!doctype html>
+<html lang="zh-CN" data-color-mode="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Fotora · 设置弹窗预览</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+        --segment-motion-duration: 280ms;
+        --accent: #55a9ff;
+        --accent-soft: rgba(85, 169, 255, 0.14);
+        --shell: #f5f5f7;
+        --nav: #ededf0;
+        --surface: #fcfcfd;
+        --surface-raised: #ffffff;
+        --field: rgba(118, 118, 128, 0.1);
+        --field-hover: rgba(118, 118, 128, 0.15);
+        --separator: rgba(0, 0, 0, 0.075);
+        --text: #1d1d1f;
+        --text-secondary: #6e6e73;
+        --text-tertiary: #96969b;
+        --icon: #77777d;
+        --shadow:
+          0 32px 90px rgba(0, 0, 0, 0.3),
+          0 10px 28px rgba(0, 0, 0, 0.16),
+          0 0 0 0.5px rgba(0, 0, 0, 0.13);
+        --switch-off: rgba(120, 120, 128, 0.23);
+        --switch-knob: #ffffff;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable",
+          "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      html[data-color-mode="dark"] {
+        color-scheme: dark;
+        --accent: #6dbaff;
+        --accent-soft: rgba(109, 186, 255, 0.18);
+        --shell: #202023;
+        --nav: #18181b;
+        --surface: #29292d;
+        --surface-raised: #303034;
+        --field: rgba(118, 118, 128, 0.24);
+        --field-hover: rgba(118, 118, 128, 0.32);
+        --separator: rgba(255, 255, 255, 0.08);
+        --text: #f5f5f7;
+        --text-secondary: #b0b0b6;
+        --text-tertiary: #85858c;
+        --icon: #a5a5ab;
+        --shadow:
+          0 36px 100px rgba(0, 0, 0, 0.58),
+          0 12px 32px rgba(0, 0, 0, 0.34),
+          0 0 0 0.5px rgba(255, 255, 255, 0.11);
+        --switch-off: rgba(120, 120, 128, 0.38);
+        --switch-knob: #f7f7f9;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        html[data-color-mode="system"] {
+          color-scheme: dark;
+          --accent: #6dbaff;
+          --accent-soft: rgba(109, 186, 255, 0.18);
+          --shell: #202023;
+          --nav: #18181b;
+          --surface: #29292d;
+          --surface-raised: #303034;
+          --field: rgba(118, 118, 128, 0.24);
+          --field-hover: rgba(118, 118, 128, 0.32);
+          --separator: rgba(255, 255, 255, 0.08);
+          --text: #f5f5f7;
+          --text-secondary: #b0b0b6;
+          --text-tertiary: #85858c;
+          --icon: #a5a5ab;
+          --shadow:
+            0 36px 100px rgba(0, 0, 0, 0.58),
+            0 12px 32px rgba(0, 0, 0, 0.34),
+            0 0 0 0.5px rgba(255, 255, 255, 0.11);
+          --switch-off: rgba(120, 120, 128, 0.38);
+          --switch-knob: #f7f7f9;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        min-width: 320px;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #16161a;
+        color: var(--text);
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      /* Continuous-curvature corners for panels and compact controls. */
+      .settings-dialog,
+      .nav-indicator,
+      .nav-item,
+      .settings-group,
+      .segmented,
+      .segment-thumb,
+      .segment-option,
+      .cruise-choice-bar,
+      .cruise-direction-grid,
+      .cruise-option,
+      .cruise-custom-option,
+      .keys kbd,
+      .reopen-button {
+        corner-shape: squircle;
+      }
+
+      button:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 76%, white);
+        outline-offset: 2px;
+      }
+
+      .preview-stage {
+        position: relative;
+        display: grid;
+        width: 100%;
+        height: 100%;
+        min-height: 560px;
+        place-items: center;
+        isolation: isolate;
+        overflow: hidden;
+        background: #24242a;
+      }
+
+      .preview-background {
+        position: absolute;
+        z-index: -3;
+        inset: -18px;
+        background:
+          linear-gradient(rgba(20, 20, 24, 0.16), rgba(20, 20, 24, 0.3)),
+          url("./docs/images/screenshots/library.webp") center / cover no-repeat;
+        filter: saturate(0.84) brightness(0.88);
+        transform: scale(1.025);
+      }
+
+      .preview-background::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(11, 11, 14, 0.24);
+        -webkit-backdrop-filter: blur(3px);
+        backdrop-filter: blur(3px);
+      }
+
+      .dialog-layer {
+        position: absolute;
+        z-index: 2;
+        display: grid;
+        inset: 0;
+        padding: 22px;
+        place-items: center;
+        background: rgba(8, 8, 11, 0.24);
+        transition:
+          opacity 220ms var(--ease-out),
+          visibility 0s linear 220ms;
+      }
+
+      .dialog-layer:not(.is-open) {
+        visibility: hidden;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .settings-dialog {
+        position: relative;
+        display: flex;
+        width: min(900px, calc(100vw - 44px));
+        height: min(608px, calc(100vh - 44px));
+        min-height: 529px;
+        overflow: hidden;
+        border-radius: 24px;
+        background: var(--shell);
+        box-shadow: var(--shadow);
+        opacity: 1;
+        transform: scale(1);
+        transform-origin: center;
+        transition:
+          opacity 240ms var(--ease-out),
+          transform 240ms var(--ease-out);
+      }
+
+      .dialog-layer:not(.is-open) .settings-dialog {
+        opacity: 0;
+        transform: scale(0.96);
+      }
+
+      .settings-nav {
+        position: relative;
+        display: flex;
+        width: 184px;
+        flex: 0 0 184px;
+        flex-direction: column;
+        padding: 14px 12px;
+        overflow: hidden;
+        background: var(--nav);
+        border-right: 1px solid var(--separator);
+      }
+
+      .nav-top {
+        display: grid;
+        grid-template-columns: 27px minmax(0, 1fr) 27px;
+        align-items: center;
+        min-height: 28px;
+        padding: 0 4px 0 8px;
+        gap: 10px;
+      }
+
+      .nav-heading {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+        text-align: center;
+      }
+
+      .nav-list {
+        position: relative;
+        display: grid;
+        margin-top: 17px;
+        gap: 2px;
+      }
+
+      .nav-indicator {
+        position: absolute;
+        z-index: 0;
+        top: 0;
+        right: 0;
+        left: 0;
+        height: 42px;
+        border: 0.5px solid color-mix(in srgb, var(--text) 6%, transparent);
+        border-radius: 12px;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.1), transparent),
+          var(--field-hover);
+        box-shadow:
+          0 5px 14px rgba(0, 0, 0, 0.07),
+          inset 0 1px rgba(255, 255, 255, 0.46);
+        transform: translateY(var(--nav-indicator-y, 0));
+        transition: transform 230ms var(--ease-in-out);
+        pointer-events: none;
+      }
+
+      html[data-color-mode="dark"] .nav-indicator {
+        box-shadow:
+          0 5px 14px rgba(0, 0, 0, 0.18),
+          inset 0 1px rgba(255, 255, 255, 0.07);
+      }
+
+      .nav-item {
+        appearance: none;
+        position: relative;
+        z-index: 1;
+        display: flex;
+        width: 100%;
+        height: 42px;
+        align-items: center;
+        padding: 0 11px;
+        gap: 10px;
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 460;
+        line-height: 1;
+        letter-spacing: 0.012em;
+        text-align: left;
+        cursor: pointer;
+        transition:
+          color 130ms ease,
+          transform 150ms var(--ease-out);
+      }
+
+      .nav-item svg {
+        width: 17px;
+        height: 17px;
+        flex: 0 0 17px;
+        color: var(--icon);
+        transition: color 130ms ease;
+      }
+
+      .nav-item[aria-selected="true"] {
+        color: var(--text);
+        font-weight: 550;
+      }
+
+      .nav-item[aria-selected="true"] svg {
+        color: var(--accent);
+      }
+
+      .nav-item:active {
+        transform: scale(0.985);
+      }
+
+      .settings-main {
+        display: flex;
+        min-width: 0;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .icon-button {
+        appearance: none;
+        position: relative;
+        display: grid;
+        width: 27px;
+        height: 27px;
+        padding: 0;
+        place-items: center;
+        border: 0;
+        border-radius: 50%;
+        background: var(--field);
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition:
+          background-color 130ms ease,
+          color 130ms ease,
+          transform 150ms var(--ease-out);
+      }
+
+      .nav-top > .icon-button {
+        color: var(--accent);
+      }
+
+      .nav-top > .icon-button::after {
+        position: absolute;
+        inset: -1px;
+        border-radius: inherit;
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+          0 5px 16px color-mix(in srgb, var(--accent) 36%, transparent);
+        opacity: 0;
+        transition: opacity 130ms ease;
+        content: "";
+        pointer-events: none;
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .nav-top > .icon-button:hover {
+          color: var(--accent);
+          background: var(--accent-soft);
+        }
+
+        .nav-top > .icon-button:hover::after {
+          opacity: 1;
+        }
+      }
+
+      .icon-button:active {
+        transform: scale(0.92);
+      }
+
+      .icon-button svg {
+        width: 13px;
+        height: 13px;
+      }
+
+      .settings-scroll {
+        min-height: 0;
+        flex: 1;
+        padding: 16px 20px;
+        overflow: hidden auto;
+        overscroll-behavior: contain;
+        overflow-anchor: none;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+      }
+
+      .settings-scroll::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+        display: none;
+      }
+
+      .settings-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .settings-group {
+        overflow: hidden;
+        border: 0.5px solid var(--separator);
+        border-radius: 18px;
+        background: var(--surface-raised);
+        box-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.025),
+          inset 0 1px rgba(255, 255, 255, 0.32);
+      }
+
+      html[data-color-mode="dark"] .settings-group {
+        box-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.08),
+          inset 0 1px rgba(255, 255, 255, 0.04);
+      }
+
+      .group-head {
+        padding: 9px 15px 6px;
+      }
+
+      .group-title {
+        margin: 0;
+        color: var(--text);
+        font-size: 11.5px;
+        font-weight: 650;
+        line-height: 1.3;
+        letter-spacing: 0.045em;
+      }
+
+      .group-note {
+        display: none;
+      }
+
+      .setting-row {
+        display: grid;
+        min-height: 42px;
+        padding: 7px 15px;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 14px;
+        border-top: 1px solid var(--separator);
+      }
+
+      .setting-row.is-stacked {
+        align-items: start;
+        grid-template-columns: 1fr;
+        gap: 9px;
+      }
+
+      .setting-copy {
+        min-width: 0;
+      }
+
+      .setting-label {
+        display: block;
+        color: var(--text);
+        font-size: 12.5px;
+        font-weight: 470;
+        line-height: 1.35;
+        letter-spacing: 0.012em;
+      }
+
+      .setting-description {
+        display: none;
+      }
+
+      .toggle {
+        appearance: none;
+        position: relative;
+        width: 36px;
+        height: 21px;
+        flex: 0 0 36px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: var(--switch-off);
+        cursor: pointer;
+        transition: background-color 170ms ease;
+      }
+
+      .toggle::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 17px;
+        height: 17px;
+        border-radius: 50%;
+        background: var(--switch-knob);
+        box-shadow:
+          0 1px 3px rgba(0, 0, 0, 0.24),
+          0 0 0 0.5px rgba(0, 0, 0, 0.09);
+        transform: translateX(0);
+        transition: transform 190ms var(--ease-out);
+      }
+
+      .toggle[aria-checked="true"] {
+        background: var(--accent);
+        box-shadow:
+          0 2px 6px color-mix(in srgb, var(--accent) 25%, transparent),
+          inset 0 1px rgba(255, 255, 255, 0.16);
+      }
+
+      .toggle[aria-checked="true"]::after {
+        transform: translateX(15px);
+      }
+
+      .segmented {
+        --segment-count: 3;
+        --segment-index: 0;
+        position: relative;
+        display: grid;
+        width: 268px;
+        max-width: 100%;
+        padding: 3px;
+        grid-template-columns: repeat(var(--segment-count), minmax(0, 1fr));
+        border-radius: 999px;
+        corner-shape: round;
+        background: var(--field);
+      }
+
+      .segment-thumb {
+        position: absolute;
+        z-index: 0;
+        top: 3px;
+        bottom: 3px;
+        left: 3px;
+        width: calc((100% - 6px) / var(--segment-count));
+        border: 0.5px solid var(--separator);
+        border-radius: 999px;
+        corner-shape: round;
+        background: var(--surface-raised);
+        box-shadow:
+          0 1px 3px rgba(0, 0, 0, 0.11),
+          inset 0 1px rgba(255, 255, 255, 0.3);
+        transform: translateX(calc(var(--segment-index) * 100%));
+        transition: transform var(--segment-motion-duration) var(--ease-in-out);
+      }
+
+      .segment-option {
+        appearance: none;
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+        height: 25px;
+        padding: 0 7px;
+        overflow: hidden;
+        border: 0;
+        border-radius: 999px;
+        corner-shape: round;
+        background: transparent;
+        box-shadow: none;
+        color: var(--text-secondary);
+        font-size: 10.5px;
+        font-weight: 470;
+        line-height: 1;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        cursor: pointer;
+        transition:
+          background-color 140ms ease,
+          border-color 140ms ease,
+          color 140ms ease,
+          box-shadow 140ms ease;
+      }
+
+      .segment-option.is-selected {
+        color: var(--text);
+        font-weight: 570;
+      }
+
+      .cruise-controls {
+        border-top: 1px solid var(--separator);
+      }
+
+      .cruise-main-row {
+        border-top: 0;
+      }
+
+      .cruise-inline-options {
+        display: flex;
+        align-items: center;
+        padding: 3px;
+        gap: 2px;
+        border-radius: 999px;
+        corner-shape: round;
+        background: var(--field);
+      }
+
+      .cruise-inline-options .cruise-option {
+        flex: 0 0 auto;
+        padding: 0 11px;
+      }
+
+      .cruise-option {
+        appearance: none;
+        position: relative;
+        z-index: 1;
+        display: inline-flex;
+        min-width: 0;
+        height: 25px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 5px;
+        border: 0.5px solid transparent;
+        border-radius: 999px;
+        corner-shape: round;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 9.5px;
+        font-weight: 470;
+        line-height: 1;
+        white-space: nowrap;
+        cursor: pointer;
+        transition:
+          background-color 130ms ease,
+          border-color 130ms ease,
+          color 130ms ease;
+      }
+
+      .cruise-option[aria-checked="true"] {
+        border-color: var(--separator);
+        background: var(--surface-raised);
+        color: var(--text);
+        box-shadow:
+          0 1px 3px rgba(0, 0, 0, 0.11),
+          inset 0 1px rgba(255, 255, 255, 0.3);
+        font-weight: 600;
+      }
+
+      .cruise-custom-option {
+        display: flex;
+        width: fit-content;
+        height: 25px;
+        align-items: center;
+        padding: 0 8px;
+        gap: 4px;
+        border: 0.5px solid transparent;
+        border-radius: 999px;
+        corner-shape: round;
+        color: var(--text-secondary);
+        font-size: 9.5px;
+        cursor: text;
+        transition:
+          background-color 130ms ease,
+          border-color 130ms ease,
+          color 130ms ease;
+      }
+
+      .cruise-custom-option[data-selected="true"] {
+        border-color: var(--separator);
+        background: var(--surface-raised);
+        color: var(--text);
+        box-shadow:
+          0 1px 3px rgba(0, 0, 0, 0.11),
+          inset 0 1px rgba(255, 255, 255, 0.3);
+      }
+
+      .cruise-custom-input {
+        width: 25px;
+        padding: 0;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        font-weight: 600;
+        text-align: center;
+        appearance: textfield;
+      }
+
+      .cruise-custom-input::-webkit-inner-spin-button,
+      .cruise-custom-input::-webkit-outer-spin-button {
+        margin: 0;
+        appearance: none;
+      }
+
+      .cruise-custom-unit {
+        color: var(--text-tertiary);
+        font-size: 9px;
+      }
+
+      .cruise-direction-row {
+        position: relative;
+        display: grid;
+        padding: 5px 15px 8px;
+        grid-template-columns: repeat(8, minmax(0, 1fr));
+        gap: 2px;
+        border-top: 1px solid var(--separator);
+      }
+
+      .cruise-direction-thumb {
+        position: absolute;
+        z-index: 0;
+        top: 5px;
+        bottom: 8px;
+        left: 15px;
+        width: calc((100% - 44px) / 8);
+        border: 0.5px solid var(--separator);
+        border-radius: 999px;
+        corner-shape: round;
+        background: var(--surface-raised);
+        box-shadow:
+          0 1px 3px rgba(0, 0, 0, 0.11),
+          inset 0 1px rgba(255, 255, 255, 0.3);
+        opacity: 0;
+        transform: translateX(
+          calc(var(--direction-index, 0) * (100% + 2px))
+        );
+        transition:
+          transform var(--segment-motion-duration) var(--ease-in-out),
+          opacity 120ms ease;
+        pointer-events: none;
+      }
+
+      .cruise-direction-row[data-has-direction="true"]
+        .cruise-direction-thumb {
+        opacity: 1;
+      }
+
+      .cruise-direction-row .cruise-option {
+        width: 100%;
+        height: 28px;
+        padding: 0;
+      }
+
+      .cruise-direction-row .cruise-option[aria-checked="true"] {
+        border-color: transparent;
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .cruise-direction-row .cruise-option.is-direction-selected {
+        color: var(--text);
+      }
+
+      .cruise-arrow {
+        display: grid;
+        width: 14px;
+        height: 14px;
+        place-items: center;
+        font-size: 14px;
+        line-height: 1;
+        transform: scale(1);
+        transform-origin: center;
+        transition: transform 140ms var(--ease-out);
+      }
+
+      .cruise-direction-row
+        .cruise-option.is-direction-selected
+        .cruise-arrow {
+        transform: scale(1.08);
+      }
+
+      .shortcut-list {
+        display: grid;
+        gap: 0;
+      }
+
+      .shortcut-row {
+        display: flex;
+        min-height: 38px;
+        align-items: center;
+        padding: 6px 15px;
+        gap: 16px;
+        border-top: 1px solid var(--separator);
+      }
+
+      .shortcut-row span:first-child {
+        flex: 1;
+        color: var(--text);
+        font-size: 12px;
+      }
+
+      .keys {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 4px;
+      }
+
+      .keys kbd {
+        display: inline-flex;
+        min-width: 24px;
+        height: 22px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 6px;
+        border: 0.5px solid var(--separator);
+        border-radius: 8px;
+        background: var(--field);
+        color: var(--text-secondary);
+        box-shadow: inset 0 -1px rgba(0, 0, 0, 0.04);
+        font-family: inherit;
+        font-size: 9.5px;
+        font-weight: 550;
+      }
+
+      .reopen-button {
+        appearance: none;
+        display: inline-flex;
+        height: 42px;
+        align-items: center;
+        padding: 0 17px;
+        gap: 8px;
+        border: 0.5px solid rgba(255, 255, 255, 0.22);
+        border-radius: 12px;
+        background: rgba(30, 30, 34, 0.72);
+        color: white;
+        box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+        -webkit-backdrop-filter: blur(16px);
+        backdrop-filter: blur(16px);
+        font-size: 12.5px;
+        font-weight: 550;
+        cursor: pointer;
+        opacity: 1;
+        transition:
+          opacity 160ms var(--ease-out),
+          transform 160ms var(--ease-out);
+      }
+
+      .dialog-layer.is-open + .reopen-button {
+        opacity: 0;
+        transform: scale(0.96);
+        pointer-events: none;
+      }
+
+      .reopen-button svg {
+        width: 15px;
+        height: 15px;
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .nav-item:not([aria-selected="true"]):hover {
+          color: var(--text);
+        }
+
+        .nav-item:not([aria-selected="true"]):hover svg {
+          color: var(--text-secondary);
+        }
+      }
+
+      @media (max-width: 780px) {
+        .dialog-layer {
+          padding: 12px;
+        }
+
+        .settings-dialog {
+          width: calc(100vw - 24px);
+          height: calc(100vh - 24px);
+          min-height: 0;
+          flex-direction: column;
+          border-radius: 20px;
+        }
+
+        .settings-nav {
+          width: 100%;
+          flex: 0 0 auto;
+          padding: 12px 13px 11px;
+          border-right: 0;
+          border-bottom: 1px solid var(--separator);
+        }
+
+        .nav-top {
+          padding: 0 3px;
+        }
+
+        .nav-list {
+          display: flex;
+          margin-top: 11px;
+          gap: 3px;
+          overflow-x: auto;
+          scrollbar-width: none;
+        }
+
+        .nav-list::-webkit-scrollbar {
+          display: none;
+        }
+
+        .nav-indicator {
+          display: none;
+        }
+
+        .nav-item {
+          width: auto;
+          height: 34px;
+          flex: 0 0 auto;
+          padding: 0 10px;
+          gap: 7px;
+          border-radius: 8px;
+          background: transparent;
+          font-size: 11.5px;
+          white-space: nowrap;
+        }
+
+        .nav-item[aria-selected="true"] {
+          background: var(--field-hover);
+        }
+
+        .settings-scroll {
+          padding: 13px 15px 18px;
+        }
+
+        .settings-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 11px;
+        }
+
+      }
+
+      @media (max-width: 520px) {
+        .setting-row {
+          gap: 10px;
+        }
+
+        .setting-row.is-control-row {
+          grid-template-columns: 1fr;
+          align-items: start;
+          gap: 8px;
+        }
+
+        .segmented {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .dialog-layer,
+        .settings-dialog,
+        .nav-indicator,
+        .segment-thumb,
+        .cruise-arrow,
+        .toggle,
+        .toggle::after,
+        .nav-item,
+        .reopen-button {
+          animation: none !important;
+          transition: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="preview-stage">
+      <div class="preview-background" aria-hidden="true"></div>
+
+      <div class="dialog-layer is-open" id="dialogLayer">
+        <section
+          class="settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="settingsTitle"
+        >
+          <aside class="settings-nav">
+            <header class="nav-top">
+              <button
+                class="icon-button"
+                type="button"
+                data-close-settings
+                aria-label="确认并关闭设置"
+              >
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path
+                    d="m3.5 8 2.8 2.8 6.2-6.2"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+              <span class="nav-heading" id="settingsTitle">设置</span>
+              <span class="nav-top-spacer" aria-hidden="true"></span>
+            </header>
+
+            <nav
+              class="nav-list"
+              id="navList"
+              role="tablist"
+              aria-label="设置分类"
+            >
+              <span class="nav-indicator" aria-hidden="true"></span>
+            </nav>
+          </aside>
+
+          <section class="settings-main">
+            <div class="settings-scroll" id="settingsScroll"></div>
+          </section>
+        </section>
+      </div>
+
+      <button class="reopen-button" type="button" id="reopenSettings">
+        <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <circle
+            cx="10"
+            cy="10"
+            r="3"
+            stroke="currentColor"
+            stroke-width="1.5"
+          />
+          <path
+            d="M10 2.8v1.6M10 15.6v1.6M17.2 10h-1.6M4.4 10H2.8M15.1 4.9l-1.1 1.1M6 14l-1.1 1.1M15.1 15.1 14 14M6 6 4.9 4.9"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+          />
+        </svg>
+        重新打开设置
+      </button>
+    </main>
+
+    <script>
+      const icons = {
+        general: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3 5.5h8M14 5.5h3M3 10h3M9 10h8M3 14.5h6M12 14.5h5"
+              stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/>
+            <circle cx="12.8" cy="5.5" r="1.6" stroke="currentColor" stroke-width="1.45"/>
+            <circle cx="7.2" cy="10" r="1.6" stroke="currentColor" stroke-width="1.45"/>
+            <circle cx="10.2" cy="14.5" r="1.6" stroke="currentColor" stroke-width="1.45"/>
+          </svg>`,
+        window: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="3" y="3.5" width="14" height="13" rx="2.4"
+              stroke="currentColor" stroke-width="1.45"/>
+            <path d="M3.5 7.5h13" stroke="currentColor" stroke-width="1.45"/>
+            <circle cx="6.2" cy="5.5" r=".75" fill="currentColor"/>
+          </svg>`,
+        library: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="3" y="5" width="11.7" height="10.5" rx="2"
+              stroke="currentColor" stroke-width="1.45"/>
+            <path d="M6 5V3.9A1.4 1.4 0 0 1 7.4 2.5h8.2A1.4 1.4 0 0 1 17 3.9v8.2a1.4 1.4 0 0 1-1.4 1.4H14"
+              stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/>
+            <path d="m5.7 13 2.8-3 2 2.1 1.4-1.4 1.1 1.1"
+              stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>`,
+        viewer: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="3" y="4" width="14" height="12" rx="2.2"
+              stroke="currentColor" stroke-width="1.45"/>
+            <path d="m6.4 12.7 2.6-3 1.8 1.9 1.3-1.4 1.5 2.5"
+              stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12.9" cy="7.7" r="1" fill="currentColor"/>
+          </svg>`,
+        media: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="3" y="3.5" width="14" height="13" rx="2.4"
+              stroke="currentColor" stroke-width="1.45"/>
+            <path d="m5.8 13.5 3.2-3.7 2.1 2.2 1.6-1.7 1.5 3.2"
+              stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="m8.2 8.5 1.5 1.5M6.7 10l1.5 1.5"
+              stroke="currentColor" stroke-width="1.15" stroke-linecap="round"/>
+          </svg>`,
+        map: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M10 17s5.2-4.6 5.2-8.4A5.2 5.2 0 0 0 4.8 8.6C4.8 12.4 10 17 10 17Z"
+              stroke="currentColor" stroke-width="1.45" stroke-linejoin="round"/>
+            <circle cx="10" cy="8.5" r="1.8" stroke="currentColor" stroke-width="1.4"/>
+          </svg>`,
+        shortcuts: `
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="2.5" y="5" width="15" height="10" rx="2.2"
+              stroke="currentColor" stroke-width="1.45"/>
+            <path d="M5.5 8h1M9.5 8h1M13.5 8h1M5.5 12h9"
+              stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/>
+          </svg>`,
+      };
+
+      const categories = [
+        {
+          id: "general",
+          label: "常规",
+          title: "常规",
+          description: "调整界面外观、启动页面和关闭窗口时的行为。",
+          groups: [
+            {
+              title: "外观",
+              note: "这些设置会影响整个界面的显示方式。",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "theme",
+                  label: "主题颜色",
+                  description: "选择 Fotora 的界面配色，或跟随系统设置。",
+                  value: "system",
+                  options: [
+                    ["system", "跟随系统"],
+                    ["light", "浅色"],
+                    ["dark", "深色"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "titlebar",
+                  label: "标题栏样式",
+                  description: "调整标题栏与内容区之间的视觉衔接。",
+                  value: "solid",
+                  options: [
+                    ["solid", "标准"],
+                    ["glass", "透明"],
+                    ["blur", "磨砂"],
+                  ],
+                },
+                {
+                  type: "toggle",
+                  key: "windowBorder",
+                  label: "显示窗口边框",
+                  description: "在应用窗口外围显示一圈细边框。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "showSettingsButton",
+                  label: "显示设置按钮",
+                  description: "关闭后，设置按钮只在鼠标悬停时出现。",
+                  value: true,
+                },
+              ],
+            },
+            {
+              title: "启动与关闭",
+              note: "决定 Fotora 如何启动，以及关闭窗口时如何处理。",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "startupView",
+                  label: "启动页面",
+                  description: "选择每次启动 Fotora 时首先显示的页面。",
+                  value: "library",
+                  options: [
+                    ["library", "图库"],
+                    ["wall", "照片墙"],
+                    ["last", "上次页面"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "closeBehavior",
+                  label: "关闭主窗口时",
+                  description: "选择点击窗口关闭按钮后要执行的操作。",
+                  value: "quit",
+                  options: [
+                    ["tray", "最小化到托盘"],
+                    ["quit", "退出 Fotora"],
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "library",
+          label: "图库与相簿栏",
+          title: "图库与相簿栏",
+          description: "设置图库的默认展示方式，以及相簿栏中要显示的入口。",
+          groups: [
+            {
+              title: "图库浏览",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "defaultPhotoLayout",
+                  label: "默认照片布局",
+                  description: "选择图库打开照片时首先使用的布局。",
+                  value: "square",
+                  options: [
+                    ["original", "原始比例"],
+                    ["square", "方形网格"],
+                    ["justified", "等高成行"],
+                    ["masonry", "等宽成列"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "corners",
+                  label: "缩略图边角",
+                  description: "更改照片和视频缩略图的默认形状。",
+                  value: "rounded",
+                  options: [
+                    ["rounded", "圆角"],
+                    ["square", "直角"],
+                  ],
+                },
+                {
+                  type: "toggle",
+                  key: "timeline",
+                  label: "显示时间轴",
+                  description: "在图库旁边显示日期时间轴，方便快速定位。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "timeShortcuts",
+                  label: "显示时间按钮",
+                  description: "在图库顶部显示用于跳转日期的时间按钮。",
+                  value: true,
+                },
+              ],
+            },
+            {
+              title: "相簿栏入口",
+              note: "选择哪些入口常驻，哪些只在悬停时出现。",
+              rows: [
+                {
+                  type: "toggle",
+                  key: "hoverSidebar",
+                  label: "悬停展开相簿栏",
+                  description: "收起后，将鼠标移到左侧边缘即可临时展开相簿栏。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "unfiled",
+                  label: "显示“未归档”卡",
+                  description: "在相簿栏中保留未归档照片的卡片。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "photoWallEntry",
+                  label: "显示“照片墙”卡",
+                  description: "在相簿栏中显示当前图库的照片墙卡片。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "showLibrarySwitchButton",
+                  label: "显示“切换图库”",
+                  description: "开启时按钮常驻；关闭后仅在鼠标悬停时显示。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "showImportLibraryButton",
+                  label: "显示“导入图库”",
+                  description: "开启时按钮常驻；关闭后仅在鼠标悬停时显示。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "showTrashButton",
+                  label: "显示“最近删除”",
+                  description: "开启时入口常驻；关闭后仅在鼠标悬停时显示。",
+                  value: true,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "viewer",
+          label: "预览与查看器",
+          title: "预览与查看器",
+          description: "调整照片预览、滚轮操作和视频播放方式。",
+          groups: [
+            {
+              title: "照片预览",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "previewSize",
+                  label: "预览尺寸",
+                  description: "设置悬停或打开照片时，预览画面的显示大小。",
+                  value: "small",
+                  options: [
+                    ["large", "宽大"],
+                    ["medium", "适中"],
+                    ["small", "紧凑"],
+                  ],
+                },
+                {
+                  type: "toggle",
+                  key: "blur",
+                  label: "背景虚化",
+                  description: "让照片周围的背景保持柔和虚化。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "muteVideo",
+                  label: "静音预览",
+                  description: "预览视频时默认不播放声音。",
+                  value: true,
+                },
+              ],
+            },
+            {
+              title: "查看器",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "wheel",
+                  label: "滚轮行为",
+                  description:
+                    "选“缩放 / Ctrl 切换”时：滚轮缩放，Ctrl+滚轮切换照片；选“切换 / Ctrl 缩放”时：滚轮切换照片，Ctrl+滚轮缩放。",
+                  value: "zoom-navigate",
+                  options: [
+                    ["zoom-navigate", "缩放 / Ctrl 切换"],
+                    ["navigate", "切换 / Ctrl 缩放"],
+                  ],
+                },
+                {
+                  type: "toggle",
+                  key: "filmstrip",
+                  label: "显示照片栏",
+                  description: "在查看器底部显示缩略图照片栏。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "autoGrow",
+                  label: "等比放大照片",
+                  description: "在保持照片宽高比的前提下放大到最大可显示尺寸。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "editButtonAlwaysVisible",
+                  label: "显示编辑按钮",
+                  description:
+                    "开启时编辑按钮常驻；关闭后仅在鼠标悬停于查看器右上角时显示。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "showViewerNavigationButtons",
+                  label: "显示切换按钮",
+                  description:
+                    "开启后，查看器左右两侧显示带箭头的照片切换按钮；关闭后隐藏。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "frame",
+                  label: "显示四边留白",
+                  description: "开启后，在照片四周显示留白。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "loopVideo",
+                  label: "循环播放视频",
+                  description: "单个视频播放结束后自动从头开始。",
+                  value: false,
+                },
+                {
+                  type: "toggle",
+                  key: "autoNext",
+                  label: "自动播放下一个视频",
+                  description: "当前视频结束后，继续播放序列中的下一个视频。",
+                  value: false,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "media",
+          label: "照片墙与幻灯片",
+          title: "照片墙与幻灯片",
+          description: "设置照片墙的默认布局、巡航节奏和控件显示方式。",
+          groups: [
+            {
+              title: "照片墙",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "cruiseSpeed",
+                  label: "巡航速度",
+                  description: "调整照片墙自动移动的速度。",
+                  value: "normal",
+                  options: [
+                    ["fast", "快"],
+                    ["normal", "中"],
+                    ["slow", "慢"],
+                  ],
+                },
+                {
+                  type: "cruise",
+                  key: "cruiseTurn",
+                  label: "巡航换向",
+                  description: "按时间自动换向，或固定朝一个方向移动。",
+                  value: "30s",
+                  customKey: "cruiseCustomSeconds",
+                  customValue: 1,
+                  customMin: 1,
+                  customMax: 60,
+                  customUnit: "分",
+                  times: [],
+                  directions: [
+                    ["up", "↑", "向上"],
+                    ["down", "↓", "向下"],
+                    ["left", "←", "向左"],
+                    ["right", "→", "向右"],
+                    ["up-right", "↗", "向右上"],
+                    ["down-right", "↘", "向右下"],
+                    ["up-left", "↖", "向左上"],
+                    ["down-left", "↙", "向左下"],
+                  ],
+                },
+              ],
+            },
+            {
+              title: "界面按钮",
+              rows: [
+                {
+                  type: "toggle",
+                  key: "wallBorder",
+                  label: "显示照片墙边框",
+                  description: "在照片墙周围显示一圈细边框。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "wallControls",
+                  label: "显示照片墙按钮",
+                  description: "关闭后，按钮会在停止操作一段时间后自动隐藏。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "slideshowControls",
+                  label: "显示幻灯片按钮",
+                  description: "关闭后，按钮会在停止操作一段时间后自动隐藏。",
+                  value: true,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "map",
+          label: "地图与位置",
+          title: "地图与位置",
+          description: "调整地图飞行速度、底图来源和照片栏的显示。",
+          groups: [
+            {
+              title: "地图行为",
+              rows: [
+                {
+                  type: "segmented",
+                  key: "flight",
+                  label: "飞行速度",
+                  description: "选择地图飞到照片位置时的动画速度。",
+                  value: "medium",
+                  options: [
+                    ["fast", "快"],
+                    ["medium", "中"],
+                    ["slow", "慢"],
+                    ["gentle", "缓"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "networkMap",
+                  label: "瓦片地图",
+                  description: "选择 Fotora 加载瓦片地图时使用的来源。",
+                  value: "amap",
+                  options: [
+                    ["amap", "高德"],
+                    ["google", "谷歌"],
+                  ],
+                },
+                {
+                  type: "segmented",
+                  key: "satellite",
+                  label: "地图类型",
+                  description: "选择打开地图时默认显示的底图类型。",
+                  value: "satellite",
+                  options: [
+                    ["satellite", "卫星"],
+                    ["vector", "矢量"],
+                  ],
+                },
+              ],
+            },
+            {
+              title: "地图界面",
+              rows: [
+                {
+                  type: "toggle",
+                  key: "mapButtons",
+                  label: "显示地图按钮",
+                  description: "显示缩放、旋转和定位等地图操作按钮。",
+                  value: true,
+                },
+                {
+                  type: "toggle",
+                  key: "mapFilmstrip",
+                  label: "显示地图照片栏",
+                  description: "开启后，照片栏会常驻在地图底部。",
+                  value: true,
+                },
+              ],
+            },
+          ],
+        },
+        {
+          id: "shortcuts",
+          label: "快捷键",
+          title: "快捷键",
+          description: "常用操作可以直接通过键盘完成。",
+          groups: [
+            {
+              title: "通用",
+              column: 0,
+              rows: [
+                {
+                  type: "shortcut",
+                  label: "切换图库",
+                  keys: ["Alt + Q"],
+                },
+                {
+                  type: "shortcut",
+                  label: "导入图库",
+                  keys: ["Alt + D"],
+                },
+                {
+                  type: "shortcut",
+                  label: "全屏 / 退出全屏",
+                  keys: ["Ctrl + 0"],
+                },
+                {
+                  type: "shortcut",
+                  label: "最小化 / 恢复窗口",
+                  keys: ["Ctrl + 1"],
+                },
+                {
+                  type: "shortcut",
+                  label: "最大化 / 还原窗口",
+                  keys: ["Ctrl + 2"],
+                },
+                {
+                  type: "shortcut",
+                  label: "关闭窗口 / 从托盘打开",
+                  keys: ["Ctrl + 3 + Alt + W"],
+                },
+                {
+                  type: "shortcut",
+                  label: "关闭浮层 / 返回上一级",
+                  keys: ["Esc"],
+                },
+                {
+                  type: "shortcut",
+                  label: "撤销上一步",
+                  keys: ["Ctrl / ⌘ + Z"],
+                },
+                {
+                  type: "shortcut",
+                  label: "显示 / 关闭快捷键表",
+                  keys: ["?"],
+                },
+              ],
+            },
+            {
+              title: "照片网格",
+              column: 0,
+              rows: [
+                {
+                  type: "shortcut",
+                  label: "第一张 / 最后一张",
+                  keys: ["Home", "End"],
+                },
+                {
+                  type: "shortcut",
+                  label: "切换照片布局",
+                  keys: ["R"],
+                },
+                {
+                  type: "shortcut",
+                  label: "缩放照片网格",
+                  keys: ["Ctrl + 滚轮"],
+                },
+              ],
+            },
+            {
+              title: "选择",
+              column: 0,
+              rows: [
+                { type: "shortcut", label: "进入选择", keys: ["S"] },
+                {
+                  type: "shortcut",
+                  label: "勾选 / 取消勾选",
+                  keys: ["空格", "Enter"],
+                },
+                {
+                  type: "shortcut",
+                  label: "全选 / 取消全选",
+                  keys: ["Ctrl / ⌘ + A"],
+                },
+                {
+                  type: "shortcut",
+                  label: "拷贝所选",
+                  keys: ["Ctrl / ⌘ + C"],
+                },
+                {
+                  type: "shortcut",
+                  label: "删除所选",
+                  keys: ["Delete"],
+                },
+                {
+                  type: "shortcut",
+                  label: "退出选择",
+                  keys: ["Esc"],
+                },
+              ],
+            },
+            {
+              title: "照片查看器",
+              column: 1,
+              rows: [
+                {
+                  type: "shortcut",
+                  label: "上一张 / 下一张",
+                  keys: ["← / A", "→ / D"],
+                },
+                {
+                  type: "shortcut",
+                  label: "第一张 / 最后一张",
+                  keys: ["Home", "End"],
+                },
+                {
+                  type: "shortcut",
+                  label: "顺时针 / 逆时针旋转 90°",
+                  keys: ["↑ / W", "↓ / S"],
+                },
+                {
+                  type: "shortcut",
+                  label: "项目信息卡",
+                  keys: ["I", "鼠标右键"],
+                },
+                {
+                  type: "shortcut",
+                  label: "收藏 / 取消收藏",
+                  keys: ["Z"],
+                },
+                {
+                  type: "shortcut",
+                  label: "分类评级",
+                  description: "仅在开启分类评级时可用，按 0～5 设置分类。",
+                  keys: ["0～5"],
+                },
+                {
+                  type: "shortcut",
+                  label: "缩放 / 还原",
+                  keys: ["+", "−", "0"],
+                },
+                {
+                  type: "shortcut",
+                  label: "播放 / 暂停视频",
+                  keys: ["空格"],
+                },
+              ],
+            },
+            {
+              title: "幻灯片",
+              column: 1,
+              rows: [
+                {
+                  type: "shortcut",
+                  label: "暂停 / 继续",
+                  keys: ["空格"],
+                },
+                {
+                  type: "shortcut",
+                  label: "上一张 / 下一张",
+                  keys: ["←", "→"],
+                },
+                {
+                  type: "shortcut",
+                  label: "退出幻灯片",
+                  keys: ["Esc"],
+                },
+              ],
+            },
+            {
+              title: "照片墙",
+              column: 1,
+              rows: [
+                {
+                  type: "shortcut",
+                  label: "退出壁纸模式 / 返回",
+                  keys: ["Esc"],
+                },
+                {
+                  type: "shortcut",
+                  label: "全屏 / 最大化 / 最小化 / 关闭窗口",
+                  keys: ["Ctrl + 0～3"],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+
+      const state = new Map();
+      const previewParams = new URLSearchParams(window.location.search);
+      const requestedCategory = previewParams.get("category");
+      const requestedTheme = previewParams.get("theme");
+      let activeCategory = categories.some(
+        ({ id }) => id === requestedCategory,
+      )
+        ? requestedCategory
+        : "general";
+      let lastFocused = null;
+
+      if (["system", "light", "dark"].includes(requestedTheme)) {
+        document.documentElement.dataset.colorMode = requestedTheme;
+        const themeRow = categories
+          .flatMap(({ groups }) => groups)
+          .flatMap(({ rows }) => rows)
+          .find(({ key }) => key === "theme");
+        if (themeRow) themeRow.value = requestedTheme;
+      }
+
+      for (const category of categories) {
+        for (const group of category.groups) {
+          for (const row of group.rows) {
+            if (!row.key) continue;
+            state.set(row.key, row.value);
+            if (row.customKey) {
+              state.set(row.customKey, row.customValue);
+            }
+          }
+        }
+      }
+
+      const navList = document.getElementById("navList");
+      const navIndicator = navList.querySelector(".nav-indicator");
+      const settingsScroll = document.getElementById("settingsScroll");
+      const dialogLayer = document.getElementById("dialogLayer");
+      const reopenSettings = document.getElementById("reopenSettings");
+
+      categories.forEach((category) => {
+        const button = document.createElement("button");
+        button.className = "nav-item";
+        button.type = "button";
+        button.role = "tab";
+        button.dataset.category = category.id;
+        button.setAttribute(
+          "aria-selected",
+          String(category.id === activeCategory),
+        );
+        button.innerHTML = `${icons[category.id]}<span>${category.label}</span>`;
+        navList.appendChild(button);
+      });
+
+      function escapeHTML(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;");
+      }
+
+      function rowMarkup(row) {
+        if (row.type === "toggle") {
+          const checked = Boolean(state.get(row.key));
+          return `
+            <div class="setting-row"
+              ${row.description ? `title="${escapeHTML(row.description)}"` : ""}>
+              <span class="setting-copy">
+                <span class="setting-label">${escapeHTML(row.label)}</span>
+              </span>
+              <button class="toggle" type="button" role="switch"
+                data-toggle-key="${escapeHTML(row.key)}"
+                aria-label="${escapeHTML(row.label)}"
+                aria-checked="${checked}"></button>
+            </div>`;
+        }
+
+        if (row.type === "segmented") {
+          const value = state.get(row.key);
+          const index = Math.max(
+            0,
+            row.options.findIndex(([optionValue]) => optionValue === value),
+          );
+          return `
+            <div class="setting-row is-control-row"
+              ${row.description ? `title="${escapeHTML(row.description)}"` : ""}>
+              <span class="setting-copy">
+                <span class="setting-label">${escapeHTML(row.label)}</span>
+              </span>
+              <div class="segmented" role="radiogroup"
+                aria-label="${escapeHTML(row.label)}"
+                data-segment-key="${escapeHTML(row.key)}"
+                style="--segment-count:${row.options.length};--segment-index:${index}">
+                <span class="segment-thumb" aria-hidden="true"></span>
+                ${row.options
+                  .map(
+                    ([optionValue, label]) => `
+                      <button class="segment-option${
+                        optionValue === value ? " is-selected" : ""
+                      }" type="button" role="radio"
+                        data-segment-value="${escapeHTML(optionValue)}"
+                        aria-checked="${optionValue === value}">
+                        ${escapeHTML(label)}
+                      </button>`,
+                  )
+                  .join("")}
+              </div>
+            </div>`;
+        }
+
+        if (row.type === "cruise") {
+          const value = state.get(row.key);
+          const customValue = state.get(row.customKey);
+          const directionIndex = row.directions.findIndex(
+            ([optionValue]) => optionValue === value,
+          );
+          return `
+            <div class="cruise-controls"
+              ${row.description ? `title="${escapeHTML(row.description)}"` : ""}
+              data-cruise-key="${escapeHTML(row.key)}"
+              data-cruise-custom-key="${escapeHTML(row.customKey)}"
+              data-cruise-custom-min="${row.customMin}"
+              data-cruise-custom-max="${row.customMax}"
+              data-cruise-custom-unit="${escapeHTML(row.customUnit)}">
+              <div class="setting-row cruise-main-row">
+                <span class="setting-copy">
+                  <span class="setting-label">${escapeHTML(row.label)}</span>
+                </span>
+                <div class="cruise-inline-options" role="radiogroup"
+                  aria-label="换向间隔">
+                  ${row.times
+                    .map(
+                      ([optionValue, label]) => `
+                        <button class="cruise-option" type="button" role="radio"
+                          data-cruise-choice="${escapeHTML(optionValue)}"
+                          aria-checked="${optionValue === value}">
+                          ${escapeHTML(label)}
+                        </button>`,
+                    )
+                    .join("")}
+                  <label class="cruise-custom-option"
+                    data-cruise-choice="custom"
+                    data-selected="${value === "custom"}"
+                    aria-label="自定义换向间隔，单位${escapeHTML(row.customUnit)}">
+                    <span>自定义</span>
+                    <input class="cruise-custom-input" type="number"
+                      inputmode="numeric" min="${row.customMin}"
+                      max="${row.customMax}" step="1"
+                      value="${escapeHTML(customValue)}"
+                      data-cruise-custom-input>
+                    <span class="cruise-custom-unit">${escapeHTML(
+                      row.customUnit,
+                    )}</span>
+                  </label>
+                </div>
+              </div>
+              <div class="cruise-direction-row" role="radiogroup"
+                aria-label="固定移动方向"
+                data-has-direction="${directionIndex >= 0}"
+                style="--direction-index:${Math.max(0, directionIndex)}">
+                <span class="cruise-direction-thumb" aria-hidden="true"></span>
+                ${row.directions
+                  .map(
+                    ([optionValue, arrow, label]) => `
+                      <button class="cruise-option${
+                        optionValue === value ? " is-direction-selected" : ""
+                      }" type="button" role="radio"
+                        data-cruise-choice="${escapeHTML(optionValue)}"
+                        aria-label="${escapeHTML(label)}"
+                        title="${escapeHTML(label)}"
+                        aria-checked="${optionValue === value}">
+                        <span class="cruise-arrow" aria-hidden="true">${escapeHTML(
+                          arrow,
+                        )}</span>
+                      </button>`,
+                  )
+                  .join("")}
+              </div>
+            </div>`;
+        }
+
+        return `
+          <div class="shortcut-row"
+            ${row.description ? `title="${escapeHTML(row.description)}"` : ""}>
+            <span>${escapeHTML(row.label)}</span>
+            <span class="keys">${row.keys
+              .map((key) => `<kbd>${escapeHTML(key)}</kbd>`)
+              .join("")}</span>
+          </div>`;
+      }
+
+      function renderCategory(categoryId, animate = true) {
+        activeCategory = categoryId;
+        const category = categories.find(({ id }) => id === categoryId);
+        if (!category) return;
+
+        for (const button of navList.querySelectorAll(".nav-item")) {
+          button.setAttribute(
+            "aria-selected",
+            String(button.dataset.category === categoryId),
+          );
+        }
+
+        const activeButton = navList.querySelector(
+          `.nav-item[data-category="${categoryId}"]`,
+        );
+        if (activeButton) {
+          const top = activeButton.offsetTop;
+          const height = activeButton.offsetHeight;
+          if (!animate) navIndicator.style.transition = "none";
+          navIndicator.style.height = `${height}px`;
+          navIndicator.style.setProperty("--nav-indicator-y", `${top}px`);
+          if (!animate) {
+            requestAnimationFrame(() => {
+              navIndicator.style.removeProperty("transition");
+            });
+          }
+        }
+
+        const groupMarkup = (group, index) => `
+          <section class="settings-group" style="order:${index}">
+            <header class="group-head">
+              <h2 class="group-title">${escapeHTML(group.title)}</h2>
+              ${
+                group.note
+                  ? `<p class="group-note">${escapeHTML(group.note)}</p>`
+                  : ""
+              }
+            </header>
+            ${group.rows.map(rowMarkup).join("")}
+          </section>`;
+        settingsScroll.scrollTop = 0;
+        settingsScroll.innerHTML = `
+          <div class="settings-panel">
+            <div class="settings-grid">
+              ${category.groups.map(groupMarkup).join("")}
+            </div>
+          </div>`;
+      }
+
+      function applyTheme(value) {
+        document.documentElement.dataset.colorMode = value;
+      }
+
+      navList.addEventListener("click", (event) => {
+        const button = event.target.closest(".nav-item");
+        if (!button || button.dataset.category === activeCategory) return;
+        renderCategory(button.dataset.category);
+      });
+
+      settingsScroll.addEventListener("click", (event) => {
+        const toggle = event.target.closest(".toggle");
+        if (toggle) {
+          const key = toggle.dataset.toggleKey;
+          const next = !Boolean(state.get(key));
+          state.set(key, next);
+          toggle.setAttribute("aria-checked", String(next));
+          return;
+        }
+
+        const cruiseOption = event.target.closest("[data-cruise-choice]");
+        if (cruiseOption) {
+          const controls = cruiseOption.closest(".cruise-controls");
+          const key = controls.dataset.cruiseKey;
+          const value = cruiseOption.dataset.cruiseChoice;
+          state.set(key, value);
+          for (const option of controls.querySelectorAll(
+            "[data-cruise-choice]",
+          )) {
+            const selected = option === cruiseOption;
+            if (option.matches(".cruise-custom-option")) {
+              option.dataset.selected = String(selected);
+            } else {
+              option.setAttribute("aria-checked", String(selected));
+            }
+          }
+          const directionRow = controls.querySelector(".cruise-direction-row");
+          if (directionRow) {
+            const directionOptions = [
+              ...directionRow.querySelectorAll(".cruise-option"),
+            ];
+            const directionIndex = directionOptions.indexOf(cruiseOption);
+            const hadDirection =
+              directionRow.dataset.hasDirection === "true";
+            let visualDelay = 120;
+            if (directionIndex >= 0) {
+              const thumb = directionRow.querySelector(
+                ".cruise-direction-thumb",
+              );
+              if (!hadDirection && thumb) {
+                thumb.style.transition = "opacity 120ms ease";
+              }
+              directionRow.dataset.hasDirection = "true";
+              directionRow.style.setProperty(
+                "--direction-index",
+                String(directionIndex),
+              );
+              if (!hadDirection && thumb) {
+                requestAnimationFrame(() => {
+                  requestAnimationFrame(() => {
+                    thumb.style.removeProperty("transition");
+                  });
+                });
+              }
+              if (hadDirection) {
+                visualDelay =
+                  Number.parseFloat(
+                    getComputedStyle(directionRow).getPropertyValue(
+                      "--segment-motion-duration",
+                    ),
+                  ) || 280;
+              }
+            } else {
+              directionRow.dataset.hasDirection = "false";
+            }
+            if (
+              window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ) {
+              visualDelay = 0;
+            }
+            window.clearTimeout(controls.directionVisualTimer);
+            controls.directionVisualTimer = window.setTimeout(() => {
+              for (const option of directionOptions) {
+                option.classList.toggle(
+                  "is-direction-selected",
+                  directionIndex >= 0 && option === cruiseOption,
+                );
+              }
+            }, visualDelay);
+          }
+          if (
+            value === "custom" &&
+            event.target.matches("[data-cruise-custom-input]")
+          ) {
+            event.target.select();
+          }
+          return;
+        }
+
+        const segmentOption = event.target.closest(".segment-option");
+        if (!segmentOption) return;
+        const segmented = segmentOption.closest(".segmented");
+        const key = segmented.dataset.segmentKey;
+        const value = segmentOption.dataset.segmentValue;
+        const options = [
+          ...segmented.querySelectorAll(".segment-option"),
+        ];
+        const index = options.indexOf(segmentOption);
+        state.set(key, value);
+        segmented.style.setProperty("--segment-index", String(index));
+        for (const option of options) {
+          option.setAttribute(
+            "aria-checked",
+            String(option === segmentOption),
+          );
+        }
+
+        window.clearTimeout(segmented.segmentTextTimer);
+        const commitSelectionText = () => {
+          for (const option of options) {
+            option.classList.toggle("is-selected", option === segmentOption);
+          }
+          if (key === "theme") applyTheme(value);
+        };
+        const reducedMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+        const motionDuration = Number.parseFloat(
+          getComputedStyle(segmented).getPropertyValue(
+            "--segment-motion-duration",
+          ),
+        );
+        if (reducedMotion) {
+          commitSelectionText();
+        } else {
+          segmented.segmentTextTimer = window.setTimeout(
+            commitSelectionText,
+            Number.isFinite(motionDuration) ? motionDuration : 280,
+          );
+        }
+      });
+
+      settingsScroll.addEventListener("input", (event) => {
+        const input = event.target.closest("[data-cruise-custom-input]");
+        if (!input) return;
+        const controls = input.closest(".cruise-controls");
+        const min = Number.parseInt(controls.dataset.cruiseCustomMin, 10);
+        const max = Number.parseInt(controls.dataset.cruiseCustomMax, 10);
+        const next = Math.min(
+          max,
+          Math.max(min, Number.parseInt(input.value, 10) || min),
+        );
+        state.set(controls.dataset.cruiseCustomKey, next);
+        state.set(controls.dataset.cruiseKey, "custom");
+        input.value = String(next);
+        for (const option of controls.querySelectorAll(
+          "[data-cruise-choice]",
+        )) {
+          const selected = option.dataset.cruiseChoice === "custom";
+          if (option.matches(".cruise-custom-option")) {
+            option.dataset.selected = String(selected);
+          } else {
+            option.setAttribute("aria-checked", String(selected));
+          }
+        }
+        const directionRow = controls.querySelector(".cruise-direction-row");
+        if (directionRow) {
+          directionRow.removeAttribute("data-has-direction");
+          const directionOptions = [
+            ...directionRow.querySelectorAll(".cruise-option"),
+          ];
+          window.clearTimeout(controls.directionVisualTimer);
+          controls.directionVisualTimer = window.setTimeout(
+            () => {
+              for (const option of directionOptions) {
+                option.classList.remove("is-direction-selected");
+              }
+            },
+            window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              ? 0
+              : 120,
+          );
+        }
+      });
+
+      function closeSettings() {
+        if (!dialogLayer.classList.contains("is-open")) return;
+        lastFocused = document.activeElement;
+        dialogLayer.classList.remove("is-open");
+        window.setTimeout(() => reopenSettings.focus(), 180);
+      }
+
+      function openSettings() {
+        dialogLayer.classList.add("is-open");
+        window.setTimeout(() => {
+          const selected = navList.querySelector('[aria-selected="true"]');
+          selected?.focus();
+          if (lastFocused instanceof HTMLElement && !lastFocused.isConnected) {
+            lastFocused = null;
+          }
+        }, 40);
+      }
+
+      for (const closeButton of document.querySelectorAll(
+        "[data-close-settings]",
+      )) {
+        closeButton.addEventListener("click", closeSettings);
+      }
+      reopenSettings.addEventListener("click", openSettings);
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && dialogLayer.classList.contains("is-open")) {
+          event.preventDefault();
+          closeSettings();
+        }
+
+        if (
+          event.key === "Tab" &&
+          dialogLayer.classList.contains("is-open")
+        ) {
+          const focusable = [
+            ...document.querySelectorAll(
+              '.settings-dialog button:not([disabled]), .settings-dialog [tabindex]:not([tabindex="-1"])',
+            ),
+          ];
+          if (!focusable.length) return;
+          const first = focusable[0];
+          const last = focusable.at(-1);
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      });
+
+      renderCategory(activeCategory, false);
+      requestAnimationFrame(() => renderCategory(activeCategory, false));
+    </script>
+  </body>
+</html>

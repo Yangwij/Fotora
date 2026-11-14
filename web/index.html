@@ -1,0 +1,1932 @@
+<!doctype html>
+<html lang="zh-CN" class="app-initializing">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+    default-src 'self';
+    script-src 'self' 'unsafe-inline';
+    style-src 'self' 'unsafe-inline';
+    img-src 'self' data: blob: https://*.amap.com https://*.autonavi.com https://*.google.com;
+    media-src 'self' data: blob:;
+    connect-src 'self' https://*.amap.com https://*.autonavi.com https://*.google.com;
+    frame-src 'self';
+    worker-src 'self' blob:;
+    object-src 'none';
+    base-uri 'self';
+    form-action 'none';
+  "
+    />
+    <title>Fotora</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("color-mode");
+          const mode =
+            stored === "light" || stored === "dark" ? stored : "auto";
+          document.documentElement.dataset.colorMode = mode;
+          document.documentElement.style.colorScheme =
+            mode === "auto" ? "light dark" : mode;
+        } catch {
+          document.documentElement.dataset.colorMode = "auto";
+        }
+      })();
+    </script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: transparent;
+        }
+      }
+    </style>
+    <link rel="icon" type="image/svg+xml" href="icon.svg" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="photo-editor.css" />
+    <link rel="stylesheet" href="slideshow.css" />
+    <link rel="stylesheet" href="settings-dialog.css" />
+  </head>
+  <body>
+    <div class="window-surface" aria-hidden="true"></div>
+    <!-- 白色内容卡的连续曲率裁切路径由 app.js 按窗口尺寸生成。 -->
+    <svg class="window-clip-defs" aria-hidden="true" focusable="false">
+      <defs>
+        <clipPath id="windowCardClip" clipPathUnits="userSpaceOnUse">
+          <path id="windowCardClipPath" d="" />
+        </clipPath>
+        <path
+          id="fotora-spiral-search-path"
+          pathLength="100"
+          d="M 58.00 50.00 L 57.93 51.11 L 57.72 52.21 L 57.36 53.28 L 56.87 54.30 L 56.26 55.25 L 55.51 56.12 L 54.65 56.90 L 53.69 57.57 L 52.64 58.12 L 51.50 58.53 L 50.31 58.79 L 49.07 58.89 L 47.80 58.83 L 46.53 58.60 L 45.27 58.19 L 44.06 57.61 L 42.90 56.85 L 41.84 55.93 L 40.90 54.84 L 40.09 53.61 L 39.44 52.25 L 38.97 50.77 L 38.70 49.21 L 38.65 47.59 L 38.82 45.93 L 39.24 44.28 L 39.89 42.66 L 40.79 41.11 L 41.92 39.66 L 43.27 38.35 L 44.84 37.22 L 46.58 36.30 L 48.49 35.61 L 50.52 35.19 L 52.63 35.06 L 54.80 35.23 L 56.97 35.71 L 59.09 36.52 L 61.13 37.64 L 63.03 39.07 L 64.74 40.79 L 66.23 42.78 L 67.44 45.00 L 68.34 47.42 L 68.90 50.00 L 69.09 52.68 L 68.90 55.42 L 68.31 58.15 L 67.31 60.82 L 65.93 63.37 L 64.16 65.73 L 62.04 67.85 L 59.60 69.69 L 56.88 71.18 L 53.93 72.28 L 50.80 72.97 L 47.56 73.21 L 44.27 72.97 L 41.00 72.27 L 37.83 71.09 L 34.81 69.45 L 32.02 67.36 L 29.53 64.87 L 27.39 62.02 L 25.66 58.86 L 24.38 55.45 L 23.59 51.85 L 23.32 48.13 L 23.59 44.39 L 24.39 40.68 L 25.73 37.09 L 27.58 33.71 L 29.90 30.59 L 32.67 27.82 L 35.83 25.46 L 39.31 23.55 L 43.06 22.16 L 46.98 21.30 L 51.01 21.01 L 55.06 21.30 L 59.04 22.17 L 62.88 23.60 L 66.48 25.56 L 69.78 28.03 L 72.70 30.95 L 75.18 34.26 L 77.17 37.90 L 78.62 41.79 L 79.50 45.85 L 79.80 50.00 L 79.50 54.15 L 78.62 58.21 L 77.17 62.10 L 75.18 65.74 L 72.70 69.05 L 69.78 71.97 L 66.48 74.44 L 62.88 76.40 L 59.04 77.83 L 55.06 78.70 L 51.01 78.99 L 46.98 78.70 L 43.06 77.84 L 39.31 76.45 L 35.83 74.54 L 32.67 72.18 L 29.90 69.41 L 27.58 66.29 L 25.73 62.91 L 24.39 59.32 L 23.59 55.61 L 23.32 51.87 L 23.59 48.15 L 24.38 44.55 L 25.66 41.14 L 27.39 37.98 L 29.53 35.13 L 32.02 32.64 L 34.81 30.55 L 37.82 28.91 L 41.00 27.73 L 44.27 27.03 L 47.56 26.79 L 50.80 27.03 L 53.93 27.72 L 56.88 28.82 L 59.60 30.31 L 62.04 32.15 L 64.16 34.27 L 65.93 36.63 L 67.31 39.18 L 68.31 41.85 L 68.90 44.58 L 69.09 47.32 L 68.90 50.00 L 68.34 52.58 L 67.44 55.00 L 66.23 57.22 L 64.74 59.21 L 63.03 60.93 L 61.13 62.36 L 59.09 63.48 L 56.97 64.29 L 54.80 64.77 L 52.63 64.94 L 50.52 64.81 L 48.49 64.39 L 46.58 63.70 L 44.84 62.78 L 43.27 61.65 L 41.92 60.34 L 40.79 58.89 L 39.89 57.34 L 39.24 55.72 L 38.82 54.07 L 38.65 52.41 L 38.70 50.79 L 38.97 49.23 L 39.44 47.75 L 40.09 46.39 L 40.90 45.16 L 41.84 44.07 L 42.90 43.15 L 44.06 42.39 L 45.27 41.81 L 46.53 41.40 L 47.80 41.17 L 49.07 41.11 L 50.31 41.21 L 51.50 41.47 L 52.64 41.88 L 53.69 42.43 L 54.65 43.10 L 55.51 43.88 L 56.26 44.75 L 56.87 45.70 L 57.36 46.72 L 57.72 47.79 L 57.93 48.89 L 58.00 50.00 Z"
+        />
+        <path
+          id="fotora-rose-orbit-path"
+          pathLength="100"
+          d="M 66.77 50.00 L 66.99 50.51 L 67.65 51.06 L 68.71 51.68 L 70.11 52.42 L 71.79 53.28 L 73.66 54.29 L 75.63 55.45 L 77.59 56.73 L 79.45 58.13 L 81.12 59.60 L 82.50 61.10 L 83.53 62.59 L 84.16 64.00 L 84.35 65.29 L 84.08 66.41 L 83.37 67.32 L 82.25 67.98 L 80.75 68.37 L 78.94 68.49 L 76.91 68.34 L 74.72 67.96 L 72.47 67.37 L 70.24 66.64 L 68.11 65.82 L 66.15 64.99 L 64.43 64.21 L 62.98 63.57 L 61.83 63.14 L 60.99 62.97 L 60.46 63.11 L 60.20 63.60 L 60.18 64.46 L 60.35 65.67 L 60.65 67.23 L 61.02 69.08 L 61.39 71.17 L 61.72 73.43 L 61.94 75.77 L 62.01 78.10 L 61.90 80.31 L 61.59 82.33 L 61.07 84.07 L 60.35 85.44 L 59.46 86.39 L 58.42 86.88 L 57.27 86.89 L 56.05 86.42 L 54.81 85.49 L 53.59 84.16 L 52.43 82.47 L 51.37 80.52 L 50.42 78.40 L 49.61 76.20 L 48.92 74.02 L 48.35 71.97 L 47.88 70.14 L 47.48 68.61 L 47.10 67.44 L 46.71 66.68 L 46.27 66.35 L 45.72 66.45 L 45.04 66.97 L 44.20 67.86 L 43.17 69.07 L 41.95 70.51 L 40.55 72.11 L 38.99 73.77 L 37.30 75.40 L 35.52 76.91 L 33.72 78.20 L 31.94 79.22 L 30.27 79.89 L 28.75 80.19 L 27.45 80.08 L 26.41 79.58 L 25.69 78.68 L 25.30 77.44 L 25.25 75.89 L 25.53 74.10 L 26.13 72.15 L 26.99 70.10 L 28.06 68.04 L 29.27 66.03 L 30.55 64.13 L 31.79 62.41 L 32.93 60.90 L 33.88 59.63 L 34.56 58.61 L 34.91 57.83 L 34.89 57.28 L 34.47 56.91 L 33.64 56.70 L 32.42 56.60 L 30.83 56.55 L 28.94 56.49 L 26.82 56.40 L 24.55 56.21 L 22.22 55.90 L 19.94 55.46 L 17.80 54.85 L 15.90 54.10 L 14.33 53.21 L 13.15 52.21 L 12.42 51.12 L 12.17 50.00 L 12.42 48.88 L 13.15 47.79 L 14.33 46.79 L 15.90 45.90 L 17.80 45.15 L 19.94 44.54 L 22.22 44.10 L 24.55 43.79 L 26.82 43.60 L 28.94 43.51 L 30.83 43.45 L 32.42 43.40 L 33.64 43.30 L 34.47 43.09 L 34.89 42.72 L 34.91 42.17 L 34.56 41.39 L 33.88 40.37 L 32.93 39.10 L 31.79 37.59 L 30.55 35.87 L 29.27 33.97 L 28.06 31.96 L 26.99 29.90 L 26.13 27.85 L 25.53 25.90 L 25.25 24.11 L 25.30 22.56 L 25.69 21.32 L 26.41 20.42 L 27.45 19.92 L 28.75 19.81 L 30.27 20.11 L 31.94 20.78 L 33.72 21.80 L 35.52 23.09 L 37.30 24.60 L 38.99 26.23 L 40.55 27.89 L 41.95 29.49 L 43.17 30.93 L 44.20 32.14 L 45.04 33.03 L 45.72 33.55 L 46.27 33.65 L 46.71 33.32 L 47.10 32.56 L 47.48 31.39 L 47.88 29.86 L 48.35 28.03 L 48.92 25.98 L 49.61 23.80 L 50.42 21.60 L 51.37 19.48 L 52.43 17.53 L 53.59 15.84 L 54.81 14.51 L 56.05 13.58 L 57.27 13.11 L 58.42 13.12 L 59.46 13.61 L 60.35 14.56 L 61.07 15.93 L 61.59 17.67 L 61.90 19.69 L 62.01 21.90 L 61.94 24.23 L 61.72 26.57 L 61.39 28.83 L 61.02 30.92 L 60.65 32.77 L 60.35 34.33 L 60.18 35.54 L 60.20 36.40 L 60.46 36.89 L 60.99 37.03 L 61.83 36.86 L 62.98 36.43 L 64.43 35.79 L 66.15 35.01 L 68.11 34.18 L 70.24 33.36 L 72.47 32.63 L 74.72 32.04 L 76.91 31.66 L 78.94 31.51 L 80.75 31.63 L 82.25 32.02 L 83.37 32.68 L 84.08 33.59 L 84.35 34.71 L 84.16 36.00 L 83.53 37.41 L 82.50 38.90 L 81.12 40.40 L 79.45 41.87 L 77.59 43.27 L 75.63 44.55 L 73.66 45.71 L 71.79 46.72 L 70.11 47.58 L 68.71 48.32 L 67.65 48.94 L 66.99 49.49 L 66.77 50.00 Z"
+        />
+      </defs>
+    </svg>
+    <div
+      class="startup-screen"
+      id="startupScreen"
+      role="status"
+      aria-live="polite"
+    >
+      <div class="startup-loading">
+        <svg
+          class="fotora-curve-loader fotora-curve-loader--circle"
+          viewBox="0 0 100 100"
+          aria-hidden="true"
+          focusable="false"
+          data-curve-loader="circle"
+        >
+          <g class="fotora-curve-loader__group"></g>
+        </svg>
+        <span class="startup-title">Fotora</span>
+        <span class="startup-copy">正在打开图库…</span>
+      </div>
+    </div>
+
+    <!-- 照片墙是延迟挂载的独立 iframe；载入层留在父页面，
+         避免 iframe 尚不可见时连里面的载入提示也一起看不见。 -->
+    <div
+      class="photo-wall-loading-layer"
+      id="photoWallLoading"
+      aria-hidden="true"
+      hidden
+    >
+      <svg
+        class="fotora-curve-loader fotora-curve-loader--lemniscate"
+        viewBox="0 0 100 100"
+        aria-hidden="true"
+        focusable="false"
+        data-curve-loader="lemniscate"
+      >
+        <g class="fotora-curve-loader__group"></g>
+      </svg>
+    </div>
+
+    <!-- 窗口控制键独立于照片工具栏，切换显示样式时不会挤占照片操作按钮。 -->
+    <div class="window-controls" id="windowControls" aria-label="窗口控制">
+      <button
+        class="window-control-ctrl0"
+        type="button"
+        data-window-action="toggle-fullscreen"
+        aria-label="切换全屏（Ctrl+0）"
+        title="切换全屏（Ctrl+0）"
+      >
+        <span class="ctrl-zero-key" aria-hidden="true">
+          <svg class="ctrl-zero-icon" viewBox="0 0 18 18" fill="none">
+            <rect
+              x="2.75"
+              y="2.75"
+              width="12.5"
+              height="12.5"
+              rx="1.5"
+              stroke="currentColor"
+              stroke-width="1.15"
+            />
+            <rect
+              x="6.75"
+              y="6.75"
+              width="4.5"
+              height="4.5"
+              rx="0.55"
+              stroke="currentColor"
+              stroke-width="1.35"
+            />
+          </svg>
+        </span>
+      </button>
+      <div
+        class="window-controls-macos"
+        role="group"
+        aria-label="红绿灯窗口控制"
+      >
+        <button
+          class="window-control-macos is-minimize"
+          type="button"
+          data-window-action="minimize"
+          aria-label="最小化窗口"
+          title="最小化"
+        >
+          <span aria-hidden="true"></span>
+        </button>
+        <button
+          class="window-control-macos is-maximize"
+          type="button"
+          data-window-action="toggle-maximize"
+          aria-label="最大化窗口"
+          title="最大化"
+        >
+          <span aria-hidden="true"></span>
+        </button>
+        <button
+          class="window-control-macos is-close"
+          type="button"
+          data-window-action="close"
+          aria-label="关闭窗口"
+          title="关闭"
+        >
+          <span aria-hidden="true"></span>
+        </button>
+      </div>
+      <div
+        class="window-controls-windows"
+        role="group"
+        aria-label="Windows 窗口控制"
+      >
+        <button
+          class="window-control-windows"
+          type="button"
+          data-window-action="minimize"
+          aria-label="最小化窗口"
+          title="最小化"
+        >
+          <svg
+            class="window-control-minimize"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
+            <path d="M3.2 8.5h9.6" stroke="currentColor" stroke-width="1" />
+          </svg>
+        </button>
+        <button
+          class="window-control-windows"
+          type="button"
+          data-window-action="toggle-maximize"
+          aria-label="最大化窗口"
+          title="最大化"
+        >
+          <svg
+            class="window-control-maximize"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
+            <rect
+              x="3.4"
+              y="3.4"
+              width="9.2"
+              height="9.2"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+            />
+          </svg>
+          <svg
+            class="window-control-restore"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          >
+            <path
+              d="M5.1 4.7V3.4h7.2v7.2h-1.4M3.4 5.4h7.2v7.2H3.4z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+            />
+          </svg>
+        </button>
+        <button
+          class="window-control-windows is-close"
+          type="button"
+          data-window-action="close"
+          aria-label="关闭窗口"
+          title="关闭"
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="m4.2 4.2 7.6 7.6M11.8 4.2l-7.6 7.6"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <!-- 控制栏下方的玻璃上缘没有可见内容，单独提供拖窗 / 双击命中区。 -->
+    <div class="window-top-grab" id="windowTopGrab" aria-hidden="true"></div>
+
+    <div class="app">
+      <!-- 日常状态保持在与项目区相同的合成层；进入照片墙时由脚本临时移出，
+           避免缩放和模糊影响，退出动画结束后再放回这里。 -->
+      <button
+        class="sidebar-collapse-btn sidebar-rail-overlay"
+        id="sidebarRailBtn"
+        type="button"
+        aria-label="收起相簿栏"
+        aria-expanded="true"
+      >
+        <span class="sidebar-rail-visual" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect
+            class="rail-outline"
+            x="3"
+            y="4.5"
+            width="18"
+            height="15"
+            rx="3.2"
+            stroke="currentColor"
+            stroke-width="1.8"
+          />
+          <path
+            class="rail-divider"
+            d="M9 4.8v14.4"
+            stroke="currentColor"
+            stroke-width="1.8"
+          />
+          <path
+            class="rail-ticks"
+            d="M5.6 8h1.7M5.6 11h1.7M5.6 14h1.7"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+          />
+        </svg>
+      </button>
+      <div
+        class="sidebar-hover-edge"
+        id="sidebarHoverEdge"
+        role="button"
+        tabindex="-1"
+        aria-label="展开相簿栏"
+        aria-hidden="true"
+      ></div>
+      <!-- ================= 左侧边栏 ================= -->
+      <aside class="sidebar" id="sidebar">
+        <header class="sidebar-head">
+          <div class="sidebar-brand">
+            <span class="sidebar-collapse-slot" aria-hidden="true"></span>
+            <h1 class="sidebar-title" id="sidebarTitle">Fotora</h1>
+          </div>
+          <div class="head-actions" id="headActions">
+            <!-- 三颗圆形操作键；默认停在相簿栏标题右侧，非隐藏模式下移入顶部控制栏。 -->
+            <button
+              class="folder-import-btn"
+              id="sidebarOptionsBtn"
+              type="button"
+              aria-label="设置"
+              aria-haspopup="menu"
+              aria-controls="popMenu"
+              aria-expanded="false"
+            >
+              <svg
+                class="settings-gear-icon"
+                viewBox="0 0 20 20"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M8.5 2.1h3l.5 1.8 1.1.45 1.6-.95 2.1 2.1-.95 1.6.45 1.1 1.8.5v3l-1.8.5-.45 1.1.95 1.6-2.1 2.1-1.6-.95-1.1.45-.5 1.8h-3l-.5-1.8-1.1-.45-1.6.95-2.1-2.1.95-1.6-.45-1.1-1.8-.5v-3l1.8-.5.45-1.1-.95-1.6 2.1-2.1 1.6.95 1.1-.45z"
+                  stroke="currentColor"
+                  stroke-width="1"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="2.55"
+                  stroke="currentColor"
+                  stroke-width="1"
+                />
+              </svg>
+              <svg
+                class="settings-confirm-icon"
+                viewBox="0 0 20 20"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="m4.1 10.2 3.7 3.8 8.1-8"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <nav class="sidebar-list" id="sidebarList"></nav>
+
+        <div class="sidebar-foot">
+          <div class="sidebar-foot-actions">
+            <button
+              class="sidebar-foot-icon"
+              id="trashNavBtn"
+              type="button"
+              aria-label="最近删除"
+              data-tooltip="最近删除"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path
+                  d="M4 6h12M8 6V4.2h4V6M5.6 6l.7 10.2h7.4L14.4 6"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span class="sidebar-foot-count" id="trashCount" hidden></span>
+            </button>
+            <button
+              class="sidebar-foot-icon"
+              id="importLibraryBtn"
+              type="button"
+              aria-label="导入图库（Alt+D）"
+              data-tooltip="导入图库（Alt+D）"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path
+                  d="M3.2 10.7v4.2c0 .9.7 1.6 1.6 1.6h10.4c.9 0 1.6-.7 1.6-1.6v-4.2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M10 3.1v7.2M7.1 7.4 10 10.3l2.9-2.9"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button
+              class="sidebar-foot-icon"
+              id="librarySwitchBtn"
+              type="button"
+              aria-label="切换图库"
+              data-tooltip="切换图库"
+              aria-haspopup="menu"
+              aria-controls="popMenu"
+              aria-expanded="false"
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path
+                  d="M2.8 6.2h4l1.3 1.6h7.1v7.2a1.8 1.8 0 0 1-1.8 1.8H4.6a1.8 1.8 0 0 1-1.8-1.8z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+                <path
+                  d="M6.9 3.2h3.4l1.3 1.7h3.6v4.2"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="sidebar-resizer" id="sidebarResizer"></div>
+      </aside>
+
+      <!-- ================= 主内容区 ================= -->
+      <main class="main">
+        <div class="toolbar">
+          <div class="toolbar-side" id="toolbarLeftZone">
+            <button class="back-btn" id="backBtn" hidden>
+              <svg viewBox="0 0 12 20" aria-hidden="true">
+                <path
+                  d="M10 2 3 10l7 8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span id="backLabel">图库</span>
+            </button>
+            <div
+              class="library-time-modes"
+              id="libraryTimelineModes"
+              role="group"
+              aria-label="图库时间分组"
+              hidden
+            >
+              <span
+                class="library-time-mode-indicator"
+                aria-hidden="true"
+              ></span>
+              <button
+                type="button"
+                data-library-timeline-mode="year"
+                aria-pressed="false"
+              >
+                年
+              </button>
+              <button
+                type="button"
+                data-library-timeline-mode="month"
+                aria-pressed="false"
+              >
+                月
+              </button>
+              <button
+                type="button"
+                data-library-timeline-mode="day"
+                aria-pressed="false"
+              >
+                日
+              </button>
+              <button
+                type="button"
+                data-library-timeline-mode="all"
+                aria-pressed="true"
+              >
+                所有照片
+              </button>
+            </div>
+          </div>
+          <div class="toolbar-center">
+            <span class="toolbar-title-drag-zone" aria-hidden="true"></span>
+            <div class="toolbar-title" id="toolbarTitleGroup">
+              <span class="title-rename-reserve" aria-hidden="true"></span>
+              <span class="title-name-slot">
+                <span id="viewTitle">图库</span>
+                <form class="title-rename-form" id="titleRenameForm" hidden>
+                  <input
+                    class="title-rename-input"
+                    id="titleRenameInput"
+                    type="text"
+                    maxlength="100"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-label="相簿名称"
+                  />
+                </form>
+              </span>
+              <button
+                class="title-rename-btn"
+                id="renameAlbumBtn"
+                type="button"
+                aria-label="重命名相簿"
+              >
+                <svg
+                  class="rename-icon rename-icon-pencil"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M13.4 3.6l3 3-9.2 9.2-3.6.6.6-3.6z" />
+                  <path d="M11.6 5.4l3 3" />
+                </svg>
+                <svg
+                  class="rename-icon rename-icon-check"
+                  viewBox="0 0 16 16"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M3.4 8.4l3 3 6.2-6.6"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            <span class="toolbar-title-drag-zone" aria-hidden="true"></span>
+          </div>
+          <div class="toolbar-side right" id="toolbarRightZone">
+            <button
+              class="pill-btn filmstrip-toggle-btn"
+              id="filmstripBtn"
+              hidden
+              aria-label="胶片栏"
+              aria-pressed="false"
+            >
+              <span class="pill-label">胶片栏</span>
+            </button>
+            <button class="pill-btn" id="selectBtn" hidden>选择</button>
+            <button class="pill-btn" id="locationBackBtn" hidden>地点</button>
+            <button
+              class="pill-btn"
+              id="albumMenuBtn"
+              hidden
+              aria-label="更多显示选项"
+              aria-haspopup="menu"
+              aria-expanded="false"
+            >
+              <svg
+                class="hamburger-icon"
+                viewBox="0 0 16 12"
+                aria-hidden="true"
+              >
+                <rect x="0.5" y="0" width="15" height="2" rx="1" />
+                <rect x="0.5" y="5" width="15" height="2" rx="1" />
+                <rect x="0.5" y="10" width="15" height="2" rx="1" />
+              </svg>
+              <svg
+                class="menu-edit-confirm-icon"
+                viewBox="0 0 20 20"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="m4.1 10.2 3.7 3.8 8.1-8"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button class="pill-btn" id="selectAllBtn" hidden>
+              <span class="pill-label">全选</span>
+            </button>
+            <button class="pill-btn" id="cancelSelBtn" hidden>取消</button>
+            <button class="icon-btn" id="moreTopBtn" hidden aria-label="更多">
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <circle cx="4" cy="9" r="1.5" fill="currentColor" />
+                <circle cx="9" cy="9" r="1.5" fill="currentColor" />
+                <circle cx="14" cy="9" r="1.5" fill="currentColor" />
+              </svg>
+            </button>
+            <button
+              class="icon-btn accent"
+              id="createBtn"
+              hidden
+              aria-label="在当前相簿里新建一个相簿"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path
+                  d="M9 3.6v10.8M3.6 9h10.8"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <button class="pill-btn" id="editBtn" hidden>编辑</button>
+          </div>
+        </div>
+
+        <div class="content" id="content"></div>
+        <!-- 地点地图复用同一 MapLibre iframe，但每次从其他栏目进入时
+           都会重置到当前根目录照片的初始视角。 -->
+        <section
+          class="locations-map-host"
+          id="locationsMapHost"
+          hidden
+          aria-label="地点地图"
+        >
+          <iframe
+            id="locationsMapFrame"
+            title="地点地图"
+            data-src="/map/locations.html"
+          ></iframe>
+          <nav
+            class="map-filmstrip viewer-filmstrip"
+            id="locationsMapFilmstrip"
+            aria-label="地点地图照片胶片栏"
+            hidden
+          >
+            <div
+              class="viewer-filmstrip-track"
+              id="locationsMapFilmstripTrack"
+            ></div>
+          </nav>
+          <div
+            class="locations-map-loading"
+            id="locationsMapLoading"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="map-loading-card">
+              <svg
+                class="fotora-curve-loader fotora-curve-loader--circle"
+                viewBox="0 0 100 100"
+                aria-hidden="true"
+                focusable="false"
+                data-curve-loader="circle"
+              >
+                <g class="fotora-curve-loader__group"></g>
+              </svg>
+              <span id="locationsMapStatusText" class="map-loading-text"
+                >正在载入地点…</span
+              >
+              <button
+                class="locations-map-retry"
+                id="locationsMapRetry"
+                type="button"
+                hidden
+              >
+                重新载入地图
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 相簿地图是相簿内部的地图视图，不是左侧「地点」入口。
+           与地点页共用 Map 地球仪核心，但保持独立数据源和浏览上下文。 -->
+        <section
+          class="album-map-host"
+          id="albumMapHost"
+          hidden
+          aria-label="相簿地图"
+        >
+          <iframe
+            id="albumMapFrame"
+            title="相簿地图"
+            data-src="/map/album-map.html"
+          ></iframe>
+          <button
+            class="location-assign-apply"
+            id="locationAssignApply"
+            type="button"
+            hidden
+            aria-label="应用位置并继续下一张"
+            title="应用位置并继续下一张"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M4.2 10.2 8 14l7.8-8" />
+            </svg>
+          </button>
+          <nav
+            class="map-filmstrip viewer-filmstrip"
+            id="albumMapFilmstrip"
+            aria-label="相簿地图照片胶片栏"
+            hidden
+          >
+            <div
+              class="viewer-filmstrip-track"
+              id="albumMapFilmstripTrack"
+            ></div>
+          </nav>
+          <div
+            class="album-map-loading"
+            id="albumMapLoading"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="map-loading-card">
+              <svg
+                class="fotora-curve-loader fotora-curve-loader--circle"
+                viewBox="0 0 100 100"
+                aria-hidden="true"
+                focusable="false"
+                data-curve-loader="circle"
+              >
+                <g class="fotora-curve-loader__group"></g>
+              </svg>
+              <span id="albumMapStatusText" class="map-loading-text"
+                >正在载入相簿地图…</span
+              >
+              <button
+                class="album-map-retry"
+                id="albumMapRetry"
+                type="button"
+                hidden
+              >
+                重新载入地图
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 选择模式下的底部工具条 -->
+        <div
+          class="selbar is-collapsed"
+          id="selbar"
+          role="toolbar"
+          aria-label="选择操作"
+        >
+          <!-- 左下角这颗带箭头的按钮：选好照片之后，点它从底边滑上来一排相簿，挑一个搬过去 -->
+          <button
+            class="icon-btn selbar-pill-btn"
+            id="shareBtn"
+            aria-label="移动到相簿"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M5.7 4.5h10.5v11H5.7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M2.4 10h7.6M7.4 7.4 10 10l-2.6 2.6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="selbar-action-label">移动</span>
+          </button>
+          <!-- 最近删除里的左下角：彻底删除。没选东西时作用于全部，选了就作用于所选 -->
+          <button
+            class="selbar-act danger"
+            id="trashDelSelBtn"
+            hidden
+            aria-label="全部删除"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M4 6h12M8 6V4.2h4V6M5.6 6l.7 10.2h7.4L14.4 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="selbar-label">全部删除</span>
+          </button>
+          <div
+            class="selbar-count"
+            id="selCount"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            已选择 0 张照片
+          </div>
+          <button class="selbar-act accent" id="numberingDoneBtn" hidden>
+            <span class="selbar-label">完成编号</span>
+          </button>
+          <button
+            class="icon-btn selbar-pill-btn"
+            id="trashSelBtn"
+            aria-label="删除"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M4 6h12M8 6V4.2h4V6M5.6 6l.7 10.2h7.4L14.4 6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="selbar-action-label">删除</span>
+          </button>
+          <!-- 最近删除里的右下角：还原。没选东西时恢复全部，选了就恢复所选 -->
+          <button
+            class="selbar-act accent"
+            id="trashRestoreSelBtn"
+            hidden
+            aria-label="全部恢复"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M4.2 8.1A6 6 0 1 1 4.6 12"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+              />
+              <path
+                d="M4.2 3.8v4.4h4.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span class="selbar-label">全部恢复</span>
+          </button>
+        </div>
+
+        <!-- 菜单/面板打开时挡住底下的照片：只允许关闭当前弹层，不触发 hover 或勾选 -->
+        <div class="popover-shield" id="popoverShield" hidden></div>
+        <!-- 「⋯」和编辑模式「＋」共用的菜单：位置由 JS 贴着被点的按钮现算 -->
+        <div class="popmenu" id="popMenu" hidden></div>
+        <!-- 新建相簿 / 文件夹时输入名称：居中卡片，底部分成「取消 / 存储」两格 -->
+        <div class="name-dialog" id="nameDialog" hidden>
+          <div class="name-dim"></div>
+          <section
+            class="name-card"
+            id="nameCard"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="nameTitle"
+            aria-describedby="nameMessage"
+          >
+            <div class="name-copy">
+              <h2 id="nameTitle">新建相簿</h2>
+              <p id="nameMessage">请为此相簿输入名称。</p>
+            </div>
+            <form class="name-form" id="nameForm">
+              <input
+                class="name-input"
+                id="nameInput"
+                type="text"
+                placeholder="标题"
+                autocomplete="off"
+                maxlength="100"
+                spellcheck="false"
+              />
+            </form>
+            <div class="name-actions">
+              <button class="name-action" id="nameCancel" type="button">
+                取消
+              </button>
+              <button
+                class="name-action primary"
+                id="nameSubmit"
+                type="submit"
+                form="nameForm"
+                disabled
+              >
+                存储
+              </button>
+            </div>
+          </section>
+        </div>
+        <!-- 软件内位置信息：只写“照片”覆盖层，不修改磁盘原文件。 -->
+        <div
+          class="name-dialog metadata-location-dialog"
+          id="metadataLocationDialog"
+          hidden
+        >
+          <div class="name-dim"></div>
+          <section
+            class="name-card metadata-location-card"
+            id="metadataLocationCard"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="metadataLocationTitle"
+            aria-describedby="metadataLocationMessage"
+          >
+            <h2 class="metadata-location-a11y-title" id="metadataLocationTitle">
+              调整位置信息
+            </h2>
+            <p
+              class="metadata-location-a11y-title"
+              id="metadataLocationMessage"
+            >
+              在地图上选择位置。点击打勾后只保存到“照片”，不会修改磁盘原文件。
+            </p>
+            <div class="metadata-location-map" id="metadataLocationMap">
+              <iframe
+                id="metadataLocationMapFrame"
+                title="地点地图"
+                data-src="/map/index.html"
+              ></iframe>
+              <div
+                class="metadata-location-map-loading"
+                id="metadataLocationMapLoading"
+                role="status"
+                aria-live="polite"
+              >
+                <div class="metadata-location-target" aria-hidden="true">
+                  <span class="metadata-location-target-ring"></span>
+                  <span class="metadata-location-target-ring is-late"></span>
+                  <svg viewBox="0 0 44 44">
+                    <circle cx="22" cy="22" r="8"></circle>
+                    <path d="M22 3v10M22 31v10M3 22h10M31 22h10"></path>
+                    <circle cx="22" cy="22" r="2.2" class="is-dot"></circle>
+                  </svg>
+                </div>
+                <div class="metadata-location-scan" aria-hidden="true"></div>
+                <div class="metadata-location-loading-copy">
+                  <strong id="metadataLocationMapStatus">正在定位</strong>
+                  <span id="metadataLocationMapCoords">准备地图</span>
+                </div>
+                <button
+                  class="metadata-location-map-retry"
+                  id="metadataLocationMapRetry"
+                  type="button"
+                  hidden
+                >
+                  重试地图
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <!-- 空相簿「添加项目」：只在应用图库里选择，不打开系统文件面板。 -->
+        <div class="library-picker" id="libraryPicker" hidden>
+          <div class="library-picker-dim" id="libraryPickerDim"></div>
+          <section
+            class="library-picker-card"
+            id="libraryPickerCard"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="libraryPickerTitle"
+          >
+            <header class="library-picker-head">
+              <h2 class="library-picker-title" id="libraryPickerTitle">
+                从 <span id="libraryPickerSource">图库</span> 添加项目
+              </h2>
+              <div
+                class="library-picker-switch"
+                role="tablist"
+                aria-label="项目来源"
+              >
+                <button
+                  class="is-current"
+                  id="libraryPickerLibraryTab"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  data-library-picker-mode="library"
+                >
+                  图库
+                </button>
+                <button
+                  id="libraryPickerAlbumTab"
+                  type="button"
+                  role="tab"
+                  aria-selected="false"
+                  data-library-picker-mode="album"
+                >
+                  相簿
+                </button>
+              </div>
+              <div
+                class="library-picker-head-actions"
+                id="libraryPickerHeadActions"
+              >
+                <button
+                  class="library-picker-close"
+                  id="libraryPickerClose"
+                  type="button"
+                  aria-label="关闭"
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path
+                      d="M4.1 4.1l7.8 7.8M11.9 4.1l-7.8 7.8"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                    />
+                  </svg>
+                </button>
+                <button
+                  class="library-picker-confirm"
+                  id="libraryPickerConfirm"
+                  type="button"
+                  aria-label="添加所选项目"
+                  disabled
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path
+                      d="M3.4 8.4l3 3 6.2-6.6"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            </header>
+            <div class="library-picker-body">
+              <div
+                class="library-picker-album-browser"
+                id="libraryPickerAlbumBrowser"
+                hidden
+              >
+                <div
+                  class="library-picker-browse-head"
+                  id="libraryPickerBrowseHead"
+                >
+                  <button
+                    class="library-picker-back"
+                    id="libraryPickerAlbumBack"
+                    type="button"
+                    aria-label="返回上一级"
+                    hidden
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path
+                        d="M10.1 3.2 5.3 8l4.8 4.8"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.8"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  <span id="libraryPickerAlbumPath">所有相簿</span>
+                </div>
+                <div
+                  class="library-picker-album-list"
+                  id="libraryPickerAlbumList"
+                ></div>
+              </div>
+              <div class="library-picker-message" id="libraryPickerMessage">
+                正在载入图库…
+              </div>
+              <div
+                class="photo-grid library-picker-grid"
+                id="libraryPickerGrid"
+                hidden
+              ></div>
+            </div>
+          </section>
+        </div>
+        <!-- 彻底删除的确认面板：位置由 JS 贴着底栏按钮现算 -->
+        <div class="ask" id="ask" hidden>
+          <div class="ask-dim"></div>
+          <div
+            class="ask-card"
+            id="askCard"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="askTitle"
+            aria-describedby="askMsg askNote"
+          >
+            <div class="ask-head">
+              <div class="ask-copy">
+                <h2 class="ask-title" id="askTitle">彻底删除这些项目？</h2>
+                <p class="ask-msg" id="askMsg"></p>
+                <p class="ask-note" id="askNote"></p>
+              </div>
+            </div>
+            <div class="ask-actions">
+              <button
+                class="ask-action ask-cancel"
+                id="askCancel"
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                class="ask-action ask-confirm"
+                id="askOk"
+                type="button"
+              ></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 「选项」弹出来的相簿列表：一层浅灰蒙住当前这个选择界面（背景还看得见），
+           弹窗自己贴着底边滑上来；点一个相簿，选中的照片 / 视频就搬过去。
+           面板里只放相簿列表，不再加标题栏。 -->
+        <div class="picker" id="picker" hidden>
+          <div
+            class="picker-sheet"
+            id="pickerSheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="移动到相簿"
+          >
+            <div class="picker-list" id="pickerList"></div>
+          </div>
+        </div>
+
+        <div
+          class="toast"
+          id="toast"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
+        <div
+          class="status-bar is-collapsed"
+          id="statusBar"
+          aria-hidden="true"
+        ></div>
+        <div
+          class="project-preview-backdrop"
+          id="projectPreviewBackdrop"
+          aria-hidden="true"
+        ></div>
+      </main>
+
+      <!-- 位置预览的地图常驻在这里预热。使用透明度隐藏而不是 display:none，
+         让 MapLibre 能在最终尺寸下完成瓦片绘制并导出首帧。 -->
+      <div
+        class="context-map-prewarm"
+        id="contextMapPrewarmHost"
+        aria-hidden="true"
+      >
+        <iframe id="contextMapPrewarmFrame" title="项目位置预览准备区"></iframe>
+      </div>
+
+      <!-- 项目右键菜单：原项目抬起，项目区整体后退模糊，菜单落在项目下方。 -->
+      <div class="context-scene" id="contextScene" hidden>
+        <div class="context-source" id="contextSource" aria-hidden="true"></div>
+        <div
+          class="context-menu"
+          id="contextMenu"
+          role="menu"
+          aria-label="项目操作"
+          tabindex="-1"
+        ></div>
+        <div
+          class="context-crop-layer"
+          id="contextCropLayer"
+          hidden
+          aria-hidden="true"
+        >
+          <div
+            class="photo-wall-crop-frame is-context-crop"
+            id="contextCropFrame"
+          >
+            <button
+              class="photo-wall-crop-action is-cancel"
+              id="contextCropCancel"
+              type="button"
+              aria-label="取消裁剪"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path d="m4.5 4.5 9 9m0-9-9 9" />
+              </svg>
+            </button>
+            <button
+              class="photo-wall-crop-action is-confirm"
+              id="contextCropConfirm"
+              type="button"
+              aria-label="确认裁剪"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path d="m3.5 9.2 3.4 3.5 7.6-7.6" />
+              </svg>
+            </button>
+            <button
+              class="photo-wall-crop-action is-reset"
+              id="contextCropReset"
+              type="button"
+              aria-label="恢复自动裁剪"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M4 7.2A5.2 5.2 0 1 1 4.2 12" />
+                <path d="M4.1 3.8v3.7h3.7" />
+              </svg>
+            </button>
+            <button
+              class="photo-wall-crop-action is-current"
+              id="contextCropCurrent"
+              type="button"
+              aria-label="恢复当前裁剪位置"
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <path d="M4 7.2A5.2 5.2 0 1 1 4.2 12" />
+                <path d="M4.1 3.8v3.7h3.7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <section
+          class="viewer-date-popover context-date-popover"
+          id="contextDatePopover"
+          role="dialog"
+          aria-label="修改拍摄时间"
+          hidden
+        ></section>
+      </div>
+    </div>
+
+    <!-- 时间轴必须位于 .app 外，才能居中跨在内容区与窗口裁切框的接缝上。 -->
+    <div
+      class="library-timeline-scrubber"
+      id="libraryTimelineScrubber"
+      role="slider"
+      tabindex="0"
+      aria-label="时间轴"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow="0"
+      hidden
+    >
+      <div class="library-timeline-track" aria-hidden="true"></div>
+      <div
+        class="library-timeline-ticks"
+        id="libraryTimelineTicks"
+        aria-hidden="true"
+      ></div>
+      <div
+        class="library-timeline-thumb"
+        id="libraryTimelineThumb"
+        aria-hidden="true"
+      ></div>
+      <div
+        class="library-timeline-bubble"
+        id="libraryTimelineBubble"
+        aria-hidden="true"
+      ></div>
+    </div>
+
+    <!-- 查看器：朋友圈式的磨砂浮层，张数在右下角，信息卡片在右上角 -->
+    <div class="viewer" id="viewer" tabindex="-1" hidden>
+      <!-- 顶部留白整条都可以点一下退出查看。 -->
+      <div
+        class="viewer-top-close"
+        id="viewerTopClose"
+        aria-hidden="true"
+      ></div>
+      <div class="viewer-edit-zone" id="viewerEditZone">
+        <button
+          class="viewer-edit-button"
+          id="viewerEditButton"
+          type="button"
+          aria-label="编辑照片"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path
+              d="M4.1 15.9l.7-3.6L13.6 3.5a1.8 1.8 0 0 1 2.5 0l.4.4a1.8 1.8 0 0 1 0 2.5L7.7 15.2l-3.6.7Z"
+            />
+            <path d="m12.5 4.7 2.8 2.8" />
+          </svg>
+        </button>
+      </div>
+      <div class="viewer-meta">
+        <span class="viewer-favorite" id="viewerFavorite" hidden></span>
+        <span class="viewer-counter" id="viewerCounter"></span>
+      </div>
+      <div class="viewer-stage" id="viewerStage"></div>
+      <nav
+        class="viewer-filmstrip"
+        id="viewerFilmstrip"
+        aria-label="查看器胶片栏"
+        hidden
+      >
+        <div class="viewer-filmstrip-track" id="viewerFilmstripTrack"></div>
+      </nav>
+      <div
+        class="viewer-rating"
+        id="viewerRating"
+        role="group"
+        aria-label="照片分类评级"
+        hidden
+      ></div>
+      <div
+        class="photo-wall-crop-layer"
+        id="photoWallCropLayer"
+        hidden
+        aria-hidden="true"
+      >
+        <div class="photo-wall-crop-frame" id="photoWallCropFrame">
+          <button
+            class="photo-wall-crop-action is-cancel"
+            id="photoWallCropCancel"
+            type="button"
+            aria-label="取消裁剪"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="m4.5 4.5 9 9m0-9-9 9" />
+            </svg>
+          </button>
+          <button
+            class="photo-wall-crop-action is-confirm"
+            id="photoWallCropConfirm"
+            type="button"
+            aria-label="确认裁剪"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="m3.5 9.2 3.4 3.5 7.6-7.6" />
+            </svg>
+          </button>
+          <button
+            class="photo-wall-crop-action is-reset"
+            id="photoWallCropReset"
+            type="button"
+            aria-label="恢复自动裁剪"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M4 7.2A5.2 5.2 0 1 1 4.2 12" />
+              <path d="M4.1 3.8v3.7h3.7" />
+            </svg>
+          </button>
+          <button
+            class="photo-wall-crop-action is-current"
+            id="photoWallCropCurrent"
+            type="button"
+            aria-label="恢复当前裁剪位置"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M4 7.2A5.2 5.2 0 1 1 4.2 12" />
+              <path d="M4.1 3.8v3.7h3.7" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <!-- 查看大图时按 I：iOS 风格的项目信息浮层。地图区域先保留给后续资源。 -->
+      <section
+        class="viewer-info-popover"
+        id="viewerInfoPopover"
+        role="dialog"
+        aria-label="项目信息"
+        tabindex="-1"
+        hidden
+      >
+        <div class="viewer-info-head">
+          <span class="viewer-info-date" id="viewerInfoDate"></span>
+          <button
+            class="viewer-info-adjust"
+            id="viewerInfoAdjust"
+            type="button"
+            aria-label="调整拍摄时间"
+          >
+            <span>调整</span>
+          </button>
+        </div>
+        <div class="viewer-info-file">
+          <span class="viewer-info-file-name" id="viewerInfoName"></span>
+          <button
+            class="viewer-info-path"
+            id="viewerInfoPath"
+            type="button"
+            aria-label="在文件资源管理器中显示项目"
+          ></button>
+        </div>
+        <div class="viewer-info-device">
+          <div class="viewer-info-device-head">
+            <strong id="viewerInfoCamera"></strong>
+            <span class="viewer-info-badges">
+              <span class="viewer-info-format" id="viewerInfoFormat"></span>
+              <span
+                class="viewer-info-live-icon"
+                id="viewerInfoLiveIcon"
+                hidden
+                role="img"
+                aria-label="实况照片"
+              ></span>
+              <span
+                class="viewer-info-video-icon"
+                id="viewerInfoVideoIcon"
+                hidden
+                aria-hidden="true"
+              >
+                <svg viewBox="0 0 24 20">
+                  <rect
+                    x="3"
+                    y="4"
+                    width="13"
+                    height="12"
+                    rx="2.4"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                  />
+                  <path
+                    d="m16 8 5-2.4v8.8L16 12"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linejoin="round"
+                  />
+                </svg>
+              </span>
+            </span>
+          </div>
+          <div class="viewer-info-lens" id="viewerInfoLens"></div>
+          <div class="viewer-info-summary" id="viewerInfoSummary"></div>
+          <div class="viewer-info-specs" id="viewerInfoSpecs"></div>
+        </div>
+        <div
+          class="viewer-info-map"
+          id="viewerInfoMap"
+          aria-hidden="true"
+        ></div>
+        <button
+          class="viewer-info-location"
+          id="viewerInfoLocation"
+          type="button"
+        >
+          添加位置…
+        </button>
+      </section>
+      <!-- 查看大图时按 T：在原图右上角修改这一项自己的拍摄时间。 -->
+      <section
+        class="viewer-date-popover"
+        id="viewerDatePopover"
+        role="dialog"
+        aria-label="修改拍摄时间"
+        hidden
+      ></section>
+      <!-- 视频只使用这一套精简控件：时间 / 进度。单击画面切换播放与暂停。 -->
+      <div class="video-controls" id="videoControls" hidden>
+        <span class="video-time" id="videoTime">0:00 / 0:00</span>
+        <input
+          class="video-seek"
+          id="videoSeek"
+          type="range"
+          min="0"
+          max="1"
+          value="0"
+          step="0.01"
+          aria-label="播放进度"
+        />
+      </div>
+
+      <aside class="viewer-panel" id="viewerPanel">
+        <div class="panel-title" id="viewerTitle"></div>
+        <div class="panel-info" id="viewerInfo"></div>
+      </aside>
+    </div>
+
+    <!-- 幻灯片：只播放当前相簿 / 图库里的照片，关闭后原页面状态保持不变。 -->
+    <section
+      class="album-slideshow"
+      id="albumSlideshow"
+      hidden
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="slideshowTitle"
+      aria-describedby="slideshowDateRange"
+      tabindex="-1"
+    >
+      <div class="slideshow-wash" aria-hidden="true"></div>
+      <div class="slideshow-stage" id="slideshowStage" aria-hidden="true"></div>
+      <div class="slideshow-intro" id="slideshowIntro">
+        <span class="slideshow-kicker">幻灯片</span>
+        <h2 id="slideshowTitle"></h2>
+        <p id="slideshowDateRange"></p>
+      </div>
+      <div class="slideshow-top-controls" id="slideshowTopControls">
+        <div class="slideshow-settings-anchor">
+          <button
+            class="slideshow-round-button slideshow-settings-button"
+            id="slideshowSettingsButton"
+            type="button"
+            aria-label="播放设置"
+            aria-expanded="false"
+            aria-controls="slideshowSettingsPanel"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M3.5 5.5h13M3.5 14.5h13"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+              <circle cx="7.3" cy="5.5" r="2.1" fill="currentColor" />
+              <circle cx="12.7" cy="14.5" r="2.1" fill="currentColor" />
+            </svg>
+          </button>
+          <div
+            class="slideshow-settings-panel"
+            id="slideshowSettingsPanel"
+            role="group"
+            aria-label="幻灯片播放设置"
+            hidden
+          >
+            <div class="slideshow-setting-row slideshow-repeat-row">
+              <span class="slideshow-setting-label" id="slideshowRepeatLabel"
+                >重复播放</span
+              >
+              <button
+                class="slideshow-switch"
+                id="slideshowRepeat"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="slideshowRepeatLabel"
+              >
+                <span aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="slideshow-setting-row slideshow-order-row">
+              <span class="slideshow-setting-label" id="slideshowOrderLabel"
+                >播放顺序</span
+              >
+              <div
+                class="slideshow-order-control"
+                role="group"
+                aria-labelledby="slideshowOrderLabel"
+              >
+                <button
+                  class="slideshow-order-button"
+                  type="button"
+                  data-slideshow-order="sequential"
+                  aria-pressed="true"
+                >
+                  顺序
+                </button>
+                <button
+                  class="slideshow-order-button"
+                  type="button"
+                  data-slideshow-order="random"
+                  aria-pressed="false"
+                >
+                  随机
+                </button>
+              </div>
+            </div>
+            <div class="slideshow-setting-row slideshow-speed-row">
+              <div class="slideshow-speed-heading">
+                <label for="slideshowSpeed">调整速度</label>
+                <output id="slideshowSpeedValue" for="slideshowSpeed"
+                  >1×</output
+                >
+              </div>
+              <div class="slideshow-speed-control">
+                <svg
+                  class="slideshow-speed-icon is-slow"
+                  viewBox="0 0 32 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M4.8 11.2c1.1-3.1 4.2-5.2 7.8-5.2 3.7 0 6.8 2 8 5.1l.6 2.2h-4.6l-1.3 2.2H9.3L8 13.3H4.2l.6-2.1Z"
+                    fill="currentColor"
+                  />
+                  <circle cx="23.2" cy="10.8" r="3.1" fill="currentColor" />
+                  <circle cx="24.2" cy="10" r=".68" fill="#f4f4f5" />
+                  <path
+                    d="M7.1 15 5.2 18.2M11 15.4l.8 2.8M16 15.4l-.8 2.8M20 15l1.9 3.2"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                  />
+                </svg>
+                <input
+                  class="slideshow-speed-range"
+                  id="slideshowSpeed"
+                  type="range"
+                  min="0.5"
+                  max="2"
+                  step="0.01"
+                  value="1"
+                  aria-label="调整播放速度"
+                  aria-valuetext="1 倍"
+                />
+                <svg
+                  class="slideshow-speed-icon is-fast"
+                  viewBox="0 0 32 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M13.2 12.2C10.1 9.2 8.4 5.8 9.8 4.4c1.3-1.2 3.3.5 5 3.5l1.8 3.3Z"
+                    fill="currentColor"
+                  />
+                  <path
+                    d="M17.8 12.1c-1.2-4-1.4-8.1.6-8.7 2.1-.7 3.1 3.4 2.5 7.7l-.5 2.7Z"
+                    fill="currentColor"
+                  />
+                  <path
+                    d="M7.4 16.6c0-3.2 2.7-5.7 6.1-5.7h5.2c3.1 0 5.6 2.2 5.6 5.1 0 3.1-2.7 5.4-6 5.4h-1.6l-2.3 1.5v-1.7h-1c-3.4 0-6-2-6-4.6Z"
+                    fill="currentColor"
+                  />
+                  <circle cx="24.8" cy="17" r="1.7" fill="currentColor" />
+                  <circle cx="12.4" cy="14.9" r=".72" fill="#f4f4f5" />
+                  <path
+                    d="M12.4 19.8 11.5 22M20.5 19.8l.9 2.1"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+        <button
+          class="slideshow-round-button slideshow-close"
+          id="slideshowClose"
+          type="button"
+          aria-label="关闭幻灯片"
+        >
+          <svg viewBox="0 0 18 18" aria-hidden="true">
+            <path
+              d="M4 4l10 10M14 4 4 14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
+      </div>
+      <div class="slideshow-bottom-controls" id="slideshowBottomControls">
+        <span class="slideshow-counter" id="slideshowCounter"></span>
+        <div
+          class="slideshow-control-pill"
+          role="group"
+          aria-label="幻灯片播放控制"
+        >
+          <button
+            class="slideshow-control-button"
+            id="slideshowPrev"
+            type="button"
+            aria-label="上一张"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="m12.8 4.6-5.6 5.4 5.6 5.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            class="slideshow-control-button slideshow-play-toggle"
+            id="slideshowToggle"
+            type="button"
+            aria-label="暂停"
+          >
+            <span
+              class="slideshow-toggle-glyph slideshow-toggle-pause"
+              aria-hidden="true"
+            >
+              <i></i><i></i>
+            </span>
+            <span
+              class="slideshow-toggle-glyph slideshow-toggle-play"
+              aria-hidden="true"
+            >
+              <i></i>
+            </span>
+          </button>
+          <button
+            class="slideshow-control-button"
+            id="slideshowNext"
+            type="button"
+            aria-label="下一张"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="m7.2 4.6 5.6 5.4-5.6 5.4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="slideshow-progress" aria-hidden="true">
+          <span id="slideshowProgress"></span>
+        </div>
+      </div>
+      <div class="slideshow-end-card" id="slideshowEndCard" hidden>
+        <span class="slideshow-kicker">播放结束</span>
+        <h3 id="slideshowEndTitle"></h3>
+        <div class="slideshow-end-actions">
+          <button
+            class="slideshow-end-action is-primary"
+            id="slideshowReplay"
+            type="button"
+          >
+            重新播放
+          </button>
+          <button
+            class="slideshow-end-action"
+            id="slideshowReturn"
+            type="button"
+          >
+            返回相簿
+          </button>
+        </div>
+      </div>
+      <p
+        class="slideshow-live-status"
+        id="slideshowLiveStatus"
+        role="status"
+        aria-live="polite"
+      ></p>
+    </section>
+
+    <!-- 按 ? 或在左上角设置菜单里打开：按界面归类展示键盘操作。 -->
+    <div class="shortcuts" id="shortcuts" hidden>
+      <div class="shortcuts-dim" data-shortcuts-close></div>
+      <section
+        class="shortcuts-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="快捷键"
+        tabindex="-1"
+      >
+        <div class="shortcuts-groups">
+          <section class="shortcuts-group">
+            <h3>通用</h3>
+            <div class="shortcut-row">
+              <span>切换图库</span
+              ><span class="shortcut-keys"><kbd>Alt + Q</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>导入图库</span
+              ><span class="shortcut-keys"><kbd>Alt + D</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>全屏 / 退出全屏</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 0</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>最小化 / 恢复窗口</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 1</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>最大化 / 还原窗口</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 2</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>关闭窗口 / 从托盘打开</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 3 + Alt + W</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>关闭浮层 / 返回上一级</span
+              ><span class="shortcut-keys"><kbd>Esc</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>撤销上一步</span
+              ><span class="shortcut-keys"><kbd>Ctrl / ⌘ + Z</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>显示 / 关闭快捷键表</span
+              ><span class="shortcut-keys"><kbd>?</kbd></span>
+            </div>
+          </section>
+
+          <section class="shortcuts-group">
+            <h3>照片网格</h3>
+            <div class="shortcut-row">
+              <span>第一张 / 最后一张</span
+              ><span class="shortcut-keys"><kbd>Home</kbd><kbd>End</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>切换照片布局</span
+              ><span class="shortcut-keys"><kbd>R</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>缩放照片网格</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 滚轮</kbd></span>
+            </div>
+          </section>
+
+          <section class="shortcuts-group">
+            <h3>选择</h3>
+            <div class="shortcut-row">
+              <span>进入选择</span
+              ><span class="shortcut-keys"><kbd>S</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>勾选 / 取消勾选</span
+              ><span class="shortcut-keys"
+                ><kbd>空格</kbd><kbd>Enter</kbd></span
+              >
+            </div>
+            <div class="shortcut-row">
+              <span>全选 / 取消全选</span
+              ><span class="shortcut-keys"><kbd>Ctrl / ⌘ + A</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>拷贝所选</span
+              ><span class="shortcut-keys"><kbd>Ctrl / ⌘ + C</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>删除所选</span
+              ><span class="shortcut-keys"><kbd>Delete</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>退出选择</span
+              ><span class="shortcut-keys"><kbd>Esc</kbd></span>
+            </div>
+          </section>
+
+          <section class="shortcuts-group">
+            <h3>照片查看器</h3>
+            <div class="shortcut-row">
+              <span>上一张 / 下一张</span
+              ><span class="shortcut-keys"
+                ><kbd>← / A</kbd><kbd>→ / D</kbd></span
+              >
+            </div>
+            <div class="shortcut-row">
+              <span>第一张 / 最后一张</span
+              ><span class="shortcut-keys"><kbd>Home</kbd><kbd>End</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>顺时针 / 逆时针旋转 90°</span
+              ><span class="shortcut-keys"
+                ><kbd>↑ / W</kbd><kbd>↓ / S</kbd></span
+              >
+            </div>
+            <div class="shortcut-row">
+              <span>项目信息卡</span
+              ><span class="shortcut-keys"><kbd>鼠标右键</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>收藏 / 取消收藏</span
+              ><span class="shortcut-keys"><kbd>Z</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span title="仅在开启分类评级时可用，按 0～5 设置分类。"
+                >分类评级</span
+              ><span class="shortcut-keys"><kbd>0～5</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>缩放 / 还原</span
+              ><span class="shortcut-keys"
+                ><kbd>+</kbd><kbd>-</kbd><kbd>0</kbd></span
+              >
+            </div>
+            <div class="shortcut-row">
+              <span>播放 / 暂停视频</span
+              ><span class="shortcut-keys"><kbd>空格</kbd></span>
+            </div>
+          </section>
+
+          <section class="shortcuts-group">
+            <h3>幻灯片</h3>
+            <div class="shortcut-row">
+              <span>暂停 / 继续</span
+              ><span class="shortcut-keys"><kbd>空格</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>上一张 / 下一张</span
+              ><span class="shortcut-keys"><kbd>←</kbd><kbd>→</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>退出幻灯片</span
+              ><span class="shortcut-keys"><kbd>Esc</kbd></span>
+            </div>
+          </section>
+
+          <section class="shortcuts-group">
+            <h3>照片墙</h3>
+            <div class="shortcut-row">
+              <span>退出壁纸模式 / 返回</span
+              ><span class="shortcut-keys"><kbd>Esc</kbd></span>
+            </div>
+            <div class="shortcut-row">
+              <span>全屏 / 最大化 / 最小化 / 关闭窗口</span
+              ><span class="shortcut-keys"><kbd>Ctrl + 0～3</kbd></span>
+            </div>
+          </section>
+        </div>
+
+        <p class="shortcuts-foot">按 <kbd>?</kbd> 或 <kbd>Esc</kbd> 关闭</p>
+      </section>
+    </div>
+
+    <script src="map-pin-icon.js"></script>
+    <script src="photo-editor.js"></script>
+    <script src="app.js"></script>
+    <script src="settings-dialog.js"></script>
+    <script src="slideshow.js"></script>
+    <script src="window-controls.js"></script>
+  </body>
+</html>

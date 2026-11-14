@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>相簿地图</title>
+    <link rel="stylesheet" href="./vendor/maplibre-gl.css" />
+    <link rel="stylesheet" href="./globe-map.css" />
+  </head>
+  <body class="globe-page-album">
+    <main class="globe-shell">
+      <div
+        id="albumMap"
+        class="globe-map"
+        role="application"
+        aria-label="相簿照片地图"
+      ></div>
+      <button
+        class="globe-close-button"
+        id="albumMapCloseButton"
+        type="button"
+        aria-label="退出位置分配"
+        title="退出位置分配"
+        hidden
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="m5 5 10 10M15 5 5 15"></path>
+        </svg>
+      </button>
+      <form class="globe-place-search" id="albumMapSearch" role="search" hidden>
+        <input
+          id="albumMapSearchInput"
+          type="text"
+          autocomplete="off"
+          placeholder="搜索地点"
+          aria-label="搜索地点"
+        />
+        <button
+          class="globe-place-search-submit"
+          type="submit"
+          aria-label="搜索"
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.8" cy="8.8" r="4.8"></circle>
+            <path d="m12.5 12.5 3.7 3.7"></path>
+          </svg>
+        </button>
+        <div
+          class="globe-place-search-results"
+          id="albumMapSearchResults"
+          role="listbox"
+          aria-label="地点搜索结果"
+          hidden
+        ></div>
+      </form>
+      <button
+        class="globe-type-toggle"
+        id="albumTypeToggle"
+        type="button"
+        aria-label="切换到卫星地图"
+        title="切换到卫星地图"
+      ></button>
+      <button
+        class="globe-compass-button"
+        id="albumCompassButton"
+        type="button"
+        aria-label="正北朝上"
+        title="转到正北朝上"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="globe-compass-ring" cx="12" cy="12" r="8.6" />
+          <g class="globe-compass-needle">
+            <path class="globe-compass-north" d="M12 4.2 15.1 12H8.9Z" />
+            <path class="globe-compass-south" d="M12 19.8 8.9 12h6.2Z" />
+          </g>
+        </svg>
+      </button>
+      <div
+        class="globe-notice"
+        id="albumMapNotice"
+        role="status"
+        aria-live="polite"
+        hidden
+      ></div>
+    </main>
+    <script src="./vendor/maplibre-gl.js"></script>
+    <script src="./drag-inertia.js"></script>
+    <script src="../map-pin-icon.js"></script>
+    <script src="./embedded-globe.js"></script>
+    <script src="./album-map.js"></script>
+  </body>
+</html>

@@ -1,0 +1,928 @@
+:root {
+  --lightningcss-light: initial;
+  --lightningcss-dark: ;
+  color-scheme: light dark;
+  --pw-paper: #f3efeb;
+  --pw-ink: #1d1917;
+  --pw-placeholder: #ddd6d0;
+  --pw-shadow: #22181242;
+  --pw-focus-edge: #ffffffc7;
+  --pw-focus-stroke: var(--pw-ink);
+  --pw-focus-rim: #ffffff73;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    SF Pro Text,
+    PingFang SC,
+    Microsoft YaHei UI,
+    Microsoft YaHei,
+    system-ui,
+    sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --lightningcss-light: ;
+    --lightningcss-dark: initial;
+  }
+  :root[data-color-mode="auto"] {
+    --pw-paper: #171517;
+    --pw-ink: #f4f0ed;
+    --pw-placeholder: #2a2729;
+    --pw-shadow: #0000007a;
+    --pw-focus-edge: #0000009e;
+    --pw-focus-stroke: var(--pw-ink);
+    --pw-focus-rim: #00000061;
+  }
+}
+:root[data-color-mode="dark"] {
+  --pw-paper: #171517;
+  --pw-ink: #f4f0ed;
+  --pw-placeholder: #2a2729;
+  --pw-shadow: #0000007a;
+  --pw-focus-edge: #0000009e;
+  --pw-focus-stroke: var(--pw-ink);
+  --pw-focus-rim: #00000061;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  background: 0 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body {
+  color: var(--pw-ink);
+  -webkit-user-select: none;
+  user-select: none;
+}
+button {
+  appearance: none;
+  font: inherit;
+  color: inherit;
+  background: 0 0;
+  border: 0;
+  padding: 0;
+}
+.photo-wall-loading,
+.photo-wall-empty,
+.photo-wall-app {
+  background: 0 0;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+.photo-wall-loading,
+.photo-wall-empty {
+  place-items: center;
+  display: grid;
+}
+.photo-wall-loading {
+  color: #0a84ff;
+  display: none !important;
+}
+html.photo-wall-exiting .photo-wall-loading {
+  display: none !important;
+}
+.photo-wall-loading-circle {
+  width: 92px;
+  height: 92px;
+  display: block;
+  overflow: visible;
+}
+.photo-wall-atmosphere {
+  --pw-atmosphere-opacity: 0.14;
+  pointer-events: none;
+  isolation: isolate;
+  position: absolute;
+  inset: -6%;
+  overflow: hidden;
+}
+.photo-wall-atmosphere img {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  opacity: var(--pw-atmosphere-opacity);
+  filter: blur(64px) saturate(0.5) brightness(1.04);
+  position: absolute;
+  inset: 0;
+  transform: scale(1.08);
+}
+.photo-wall-atmosphere img.is-previous {
+  z-index: 0;
+}
+.photo-wall-atmosphere img.is-current {
+  z-index: 1;
+  animation: 0.26s ease-out both photo-wall-atmosphere-in;
+}
+@keyframes photo-wall-atmosphere-in {
+  0% {
+    opacity: 0;
+  }
+  to {
+    opacity: var(--pw-atmosphere-opacity);
+  }
+}
+.photo-wall-atmosphere:before {
+  content: "";
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(62% 58% at 12% 82%, #ffbcb2c2, #0000 72%) 12% 82%/150% 150%,
+    radial-gradient(58% 54% at 86% 14%, #bbdceeb8, #0000 74%) 86% 14%/158% 158%,
+    radial-gradient(54% 50% at 72% 80%, #e6cce89e, #0000 72%) 72% 80%/146% 146%,
+    linear-gradient(128deg, #fff0dc8f, #eee5f375 52%, #e0f0ee80) 42% 40%/165%
+      165%;
+  transition: opacity 0.72s;
+  position: absolute;
+  inset: 0;
+  transform: scale(1.025);
+}
+.photo-wall-atmosphere:after {
+  content: "";
+  z-index: 3;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 42% 30%, #ffffff47, #0000 54%),
+    linear-gradient(112deg, #ffffff6b, #f6f1eea8 62%, #f4eff0bd);
+  position: absolute;
+  inset: 0;
+}
+.photo-wall-app.is-wallpaper-mode .photo-wall-atmosphere:before {
+  opacity: 0.94;
+  will-change: transform, filter;
+  animation:
+    17s ease-in-out infinite photo-wall-ambient-breathe,
+    29s ease-in-out infinite alternate photo-wall-ambient-hue;
+}
+.photo-wall-app.is-wallpaper-mode .photo-wall-atmosphere:after {
+  background:
+    radial-gradient(circle at 42% 30%, #ffffff2b, #0000 56%),
+    linear-gradient(112deg, #fff9f53d, #f7f0f14f 58%, #f1eff43d);
+  animation: 17s ease-in-out infinite photo-wall-ambient-veil;
+}
+@keyframes photo-wall-ambient-breathe {
+  0%,
+  to {
+    transform: scale(1.025) translate(-0.6%, 0.3%);
+  }
+  46% {
+    transform: scale(1.075) translate(0.5%, -0.5%);
+  }
+  72% {
+    transform: scale(1.045) translate(0.8%, 0.2%);
+  }
+}
+@keyframes photo-wall-ambient-hue {
+  0% {
+    filter: hue-rotate(-9deg) saturate(0.96);
+  }
+  to {
+    filter: hue-rotate(11deg) saturate(1.05);
+  }
+}
+@keyframes photo-wall-ambient-veil {
+  0%,
+  to {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  html[data-color-mode="auto"] .photo-wall-atmosphere {
+    --pw-atmosphere-opacity: 0.1;
+  }
+  html[data-color-mode="auto"] .photo-wall-atmosphere img {
+    filter: blur(64px) saturate(0.5) brightness(0.58);
+  }
+  html[data-color-mode="auto"] .photo-wall-atmosphere:before {
+    background:
+      radial-gradient(62% 58% at 12% 82%, #774556b3, #0000 72%),
+      radial-gradient(58% 54% at 86% 14%, #375b7ba8, #0000 74%),
+      radial-gradient(54% 50% at 72% 80%, #4c4270a3, #0000 72%),
+      linear-gradient(128deg, #4437399e, #2b314394 52%, #203c3e99);
+  }
+  html[data-color-mode="auto"] .photo-wall-atmosphere:after {
+    background:
+      radial-gradient(circle at 42% 30%, #ffffff0d, #0000 54%),
+      linear-gradient(112deg, #2220227a, #1a181aa8 62%, #171517bd);
+  }
+  html[data-color-mode="auto"]
+    .photo-wall-app.is-wallpaper-mode
+    .photo-wall-atmosphere:after {
+    background:
+      radial-gradient(circle at 42% 30%, #ffffff0a, #0000 56%),
+      linear-gradient(112deg, #14151e38, #13171d4d 58%, #1b161f3d);
+  }
+}
+html[data-color-mode="dark"] .photo-wall-atmosphere {
+  --pw-atmosphere-opacity: 0.1;
+}
+html[data-color-mode="dark"] .photo-wall-atmosphere img {
+  filter: blur(64px) saturate(0.5) brightness(0.58);
+}
+html[data-color-mode="dark"] .photo-wall-atmosphere:before {
+  background:
+    radial-gradient(62% 58% at 12% 82%, #774556b3, #0000 72%),
+    radial-gradient(58% 54% at 86% 14%, #375b7ba8, #0000 74%),
+    radial-gradient(54% 50% at 72% 80%, #4c4270a3, #0000 72%),
+    linear-gradient(128deg, #4437399e, #2b314394 52%, #203c3e99);
+}
+html[data-color-mode="dark"] .photo-wall-atmosphere:after {
+  background:
+    radial-gradient(circle at 42% 30%, #ffffff0d, #0000 54%),
+    linear-gradient(112deg, #2220227a, #1a181aa8 62%, #171517bd);
+}
+html[data-color-mode="dark"]
+  .photo-wall-app.is-wallpaper-mode
+  .photo-wall-atmosphere:after {
+  background:
+    radial-gradient(circle at 42% 30%, #ffffff0a, #0000 56%),
+    linear-gradient(112deg, #14151e38, #13171d4d 58%, #1b161f3d);
+}
+.photo-wall-field {
+  z-index: 1;
+  cursor: grab;
+  touch-action: none;
+  overscroll-behavior: none;
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+}
+.photo-wall-field:active {
+  cursor: grabbing;
+}
+.photo-wall-field.is-wallpaper-mode,
+.photo-wall-field.is-wallpaper-mode:active {
+  cursor: default;
+}
+.photo-wall-world {
+  transform-origin: 0 0;
+  backface-visibility: hidden;
+  will-change: transform;
+  width: 0;
+  height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.photo-wall-cell {
+  contain: layout style;
+  position: absolute;
+}
+.photo-wall-cell.is-focus-active {
+  z-index: 20;
+  contain: layout style;
+}
+.photo-tile {
+  transform-origin: 50%;
+  contain: layout paint style;
+  cursor: pointer;
+  background: 0 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: hidden;
+}
+.photo-tile:hover {
+  z-index: 4;
+  filter: saturate(1.05) brightness(1.04) contrast();
+}
+.photo-wall-field.is-wallpaper-mode .photo-tile {
+  cursor: default;
+}
+.photo-tile.is-focused {
+  z-index: 20;
+  filter: saturate(1.02) brightness(1.025) contrast();
+  box-shadow:
+    0 0 0 1px var(--pw-focus-edge),
+    0 0 0 4px var(--pw-focus-stroke),
+    0 0 0 5px var(--pw-focus-rim),
+    0 28px 76px var(--pw-shadow);
+}
+.photo-tile.is-return-target,
+.photo-wall-handoff-card.is-return-target {
+  box-shadow:
+    0 0 0 1px var(--pw-focus-edge),
+    0 0 0 4px var(--pw-focus-stroke),
+    0 0 0 5px var(--pw-focus-rim);
+}
+.photo-tile:not(.is-album):after {
+  content: "";
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(#ffffff1a, #0000 60%);
+  transition: opacity 0.24s;
+  position: absolute;
+  inset: 0;
+}
+.photo-tile.is-focused:not(.is-album):after {
+  opacity: 1;
+}
+.photo-tile-face-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+.photo-wall-handoff-layer {
+  z-index: 30;
+  pointer-events: none;
+  background-color: var(--pw-paper);
+  background-image:
+    radial-gradient(circle at 42% 30%, #ffffff3d, #0000 54%),
+    linear-gradient(112deg, #ffffff42, #0000 68%);
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-color-mode="auto"] .photo-wall-handoff-layer {
+    background-image:
+      radial-gradient(circle at 42% 30%, #ffffff0a, #0000 54%),
+      linear-gradient(112deg, #ffffff08, #0000 68%);
+  }
+}
+html[data-color-mode="dark"] .photo-wall-handoff-layer {
+  background-image:
+    radial-gradient(circle at 42% 30%, #ffffff0a, #0000 54%),
+    linear-gradient(112deg, #ffffff08, #0000 68%);
+}
+.photo-wall-handoff-card {
+  backface-visibility: hidden;
+  transform-origin: 50%;
+  transform-style: preserve-3d;
+  will-change: transform;
+  background-position: 50%;
+  background-repeat: no-repeat;
+  background-size: cover;
+  border-radius: 0;
+  position: absolute;
+  overflow: hidden;
+}
+.photo-tile:focus-visible {
+  box-shadow:
+    inset 0 0 0 2px #ffffffeb,
+    0 0 0 1px #0000003d;
+}
+.photo-tile-art {
+  object-fit: cover;
+  object-position: center;
+  opacity: 0;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  transition: opacity 0.26s;
+  position: absolute;
+  inset: 0;
+}
+.photo-tile-art.is-loaded {
+  opacity: 1;
+}
+.photo-tile-art-large {
+  z-index: 1;
+}
+.photo-wall-back-zone {
+  z-index: 40;
+  pointer-events: none;
+  align-items: flex-start;
+  width: 120px;
+  height: 76px;
+  padding: 14px 0 0 16px;
+  display: flex;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear;
+}
+.photo-wall-back-zone.is-visible {
+  pointer-events: auto;
+}
+.photo-wall-back {
+  width: 36px;
+  height: 36px;
+  color: var(--pw-ink);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+  background: #ffffff75;
+  border: 1px solid #ffffff94;
+  border-radius: 50%;
+  place-items: center;
+  transition:
+    opacity 0.16s,
+    transform 0.16s,
+    background 0.16s;
+  display: grid;
+  transform: translateY(-3px) scale(0.96);
+  box-shadow: 0 8px 26px #3d2b201a;
+}
+.photo-wall-back svg {
+  width: 11px;
+  height: 18px;
+}
+.photo-wall-back.is-visible,
+.photo-wall-back:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+.photo-wall-back:hover {
+  background: #ffffffd1;
+}
+.photo-wall-tools {
+  z-index: 45;
+  pointer-events: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  display: flex;
+  position: absolute;
+  bottom: 24px;
+  right: 24px;
+}
+.photo-wall-wallpaper-zone {
+  z-index: 45;
+  pointer-events: none;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 10px;
+  width: 146px;
+  height: 96px;
+  padding: 24px 24px 0 0;
+  display: flex;
+  position: absolute;
+  top: 0;
+  right: 0;
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear;
+}
+html.photo-wall-exiting .photo-wall-back-zone,
+html.photo-wall-exiting .photo-wall-wallpaper-zone {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    visibility 0s linear 120ms;
+}
+.photo-wall-tools-button {
+  width: 36px;
+  height: 36px;
+  color: var(--pw-ink);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  background: #ffffff75;
+  border: 1px solid #ffffff94;
+  border-radius: 50%;
+  place-items: center;
+  transition:
+    opacity 0.16s,
+    transform 0.16s,
+    background 0.16s;
+  display: grid;
+  transform: translateY(3px) scale(0.96);
+  box-shadow: 0 8px 26px #3d2b201a;
+}
+.photo-wall-tools-button.is-visible,
+.photo-wall-tools-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+.photo-wall-tools-button svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  width: 18px;
+  height: 18px;
+}
+.photo-wall-tools-button:hover {
+  background: #ffffffd1;
+}
+.photo-wall-tools-button:active {
+  transform: scale(0.96);
+}
+.photo-wall-tools-button:disabled {
+  pointer-events: none;
+}
+.photo-wall-tools-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--pw-ink) 65%, transparent);
+  outline-offset: 3px;
+}
+html[data-photo-wall-pointer-idle="true"] .photo-wall-app.is-wallpaper-mode,
+html[data-photo-wall-pointer-idle="true"] .photo-wall-app.is-wallpaper-mode * {
+  cursor: none !important;
+}
+.photo-wall-app.is-wallpaper-idle .photo-wall-back,
+.photo-wall-app.is-wallpaper-idle .photo-wall-tools-button {
+  opacity: 0;
+  pointer-events: none;
+}
+@media (prefers-color-scheme: dark) {
+  html[data-color-mode="auto"] .photo-wall-back {
+    background: #ffffff14;
+    border-color: #ffffff21;
+    box-shadow: 0 8px 26px #0000003d;
+  }
+  html[data-color-mode="auto"] .photo-wall-back:hover {
+    background: #ffffff26;
+  }
+  html[data-color-mode="auto"] .photo-wall-tools-button {
+    background: #ffffff14;
+    border-color: #ffffff21;
+    box-shadow: 0 8px 26px #0000003d;
+  }
+  html[data-color-mode="auto"] .photo-wall-tools-button:hover {
+    background: #ffffff26;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.photo-wall-exiting .photo-wall-back-zone,
+  html.photo-wall-exiting .photo-wall-wallpaper-zone {
+    transition: none;
+    visibility: hidden;
+  }
+}
+html[data-color-mode="dark"] .photo-wall-back {
+  background: #ffffff14;
+  border-color: #ffffff21;
+  box-shadow: 0 8px 26px #0000003d;
+}
+html[data-color-mode="dark"] .photo-wall-back:hover {
+  background: #ffffff26;
+}
+html[data-color-mode="dark"] .photo-wall-tools-button {
+  background: #ffffff14;
+  border-color: #ffffff21;
+  box-shadow: 0 8px 26px #0000003d;
+}
+html[data-color-mode="dark"] .photo-wall-tools-button:hover {
+  background: #ffffff26;
+}
+@media (prefers-reduced-motion: reduce) {
+  .photo-tile-art,
+  .photo-wall-back,
+  .photo-wall-atmosphere:before {
+    transition: none;
+  }
+  .photo-wall-app.is-wallpaper-mode .photo-wall-atmosphere:before {
+    filter: none;
+    animation: none;
+    transform: none;
+  }
+  .photo-wall-app.is-wallpaper-mode .photo-wall-atmosphere:after {
+    animation: none;
+  }
+}
+.pw-masonry-scene {
+  transform-origin: 50%;
+  position: absolute;
+  inset: 0;
+}
+.pw-masonry-field {
+  perspective: 1400px;
+}
+.pw-masonry-handoff-card {
+  border-radius: 0;
+}
+.pw-masonry-world {
+  transform-origin: 0 0;
+  will-change: transform;
+  width: 0;
+  height: 0;
+}
+.pw-masonry-card {
+  contain: layout paint style;
+  pointer-events: auto;
+  transform-origin: 50%;
+  background: 0 0;
+  border-radius: 0;
+  transition:
+    border-radius 0.22s,
+    box-shadow 0.18s,
+    left 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.52s cubic-bezier(0.4, 0, 0.2, 1);
+  position: absolute;
+  overflow: hidden;
+}
+.pw-masonry-card.is-focused,
+.pw-masonry-card[data-focus-closing] {
+  box-shadow:
+    0 0 0 1px var(--pw-focus-edge),
+    0 0 0 4px var(--pw-focus-stroke),
+    0 0 0 5px var(--pw-focus-rim),
+    0 28px 76px var(--pw-shadow);
+}
+.pw-masonry-card[data-focus-closing] {
+  z-index: 20 !important;
+}
+.pw-masonry-card img {
+  object-fit: cover;
+  object-position: center;
+  opacity: 1;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+.pw-masonry-card-base {
+  z-index: 1;
+}
+.pw-masonry-card-preview {
+  z-index: 0;
+  filter: saturate(0.94);
+}
+.pw-masonry-card img.is-failed {
+  opacity: 0;
+}
+.pw-masonry-card.is-focus-anchor {
+  pointer-events: none;
+  transition: none;
+}
+.pw-masonry-card-detail {
+  z-index: 1;
+  position: absolute;
+  inset: 0;
+  opacity: 0 !important;
+  transition: opacity 0.16s !important;
+}
+.pw-masonry-card-detail.is-ready {
+  opacity: 1 !important;
+}
+.pw-masonry-app.is-reveal-pending
+  .pw-masonry-card
+  img:not(.pw-masonry-card-detail) {
+  opacity: 0;
+}
+.photo-wall-field.is-wallpaper-mode .pw-masonry-card {
+  cursor: default;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-masonry-card,
+  .pw-masonry-card img {
+    transition: none;
+    animation: none !important;
+  }
+}
+.pw-filmroll-field {
+  touch-action: none;
+}
+.pw-filmroll-world {
+  will-change: transform;
+  width: 0;
+  height: 0;
+  position: absolute;
+  inset: 0 auto auto 0;
+}
+.pw-filmroll-card {
+  color: #fff;
+  cursor: pointer;
+  contain: layout paint style;
+  transform-origin: 50%;
+  background: #ffffff0d;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  transition:
+    filter 0.16s,
+    opacity 0.16s,
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.18s,
+    left 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.52s cubic-bezier(0.4, 0, 0.2, 1);
+  display: block;
+  position: absolute;
+  overflow: hidden;
+}
+.pw-filmroll-card img {
+  object-fit: cover;
+  opacity: 1;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  width: 100%;
+  height: 100%;
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+.pw-filmroll-card-base {
+  z-index: 1;
+}
+.pw-filmroll-card-preview {
+  z-index: 0;
+  filter: saturate(0.94);
+}
+.pw-filmroll-card img.pw-filmroll-card-detail {
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+.pw-filmroll-card img.pw-filmroll-card-detail.is-loaded {
+  opacity: 1;
+}
+.pw-filmroll-card img.is-failed {
+  opacity: 0;
+}
+.pw-filmroll-card.is-focus-anchor {
+  pointer-events: none;
+  transition: none;
+}
+.pw-filmroll-card:hover,
+.pw-filmroll-card:focus-visible {
+  z-index: 3;
+  filter: brightness(1.11) saturate(1.035);
+  outline: none;
+  transform: scale(1.018);
+  box-shadow: 0 7px 24px #0003;
+}
+.pw-filmroll-card.is-focused {
+  z-index: 20;
+  box-shadow:
+    0 0 0 1px var(--pw-focus-edge),
+    0 0 0 4px var(--pw-focus-stroke),
+    0 0 0 5px var(--pw-focus-rim),
+    0 28px 76px var(--pw-shadow);
+}
+.pw-filmroll-card.is-focused:hover {
+  filter: brightness(1.02) saturate(1.01);
+  transform: none;
+}
+.pw-filmroll-app.has-focused-card .photo-wall-atmosphere {
+  filter: blur(8px) saturate(0.86);
+}
+.pw-filmroll-card:focus-visible {
+  box-shadow:
+    0 0 0 2px #ffffffe6,
+    0 7px 24px #0003;
+}
+.pw-filmroll-app.is-wallpaper-mode .pw-filmroll-card {
+  pointer-events: none;
+}
+.pw-filmroll-app.is-wallpaper-mode .pw-filmroll-card:hover {
+  filter: none;
+  box-shadow: none;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-filmroll-card {
+    transition: none;
+    animation: none !important;
+  }
+}
+.pw-interlock-field {
+  cursor: grab;
+  touch-action: none;
+}
+.pw-interlock-field:active {
+  cursor: grabbing;
+}
+.pw-interlock-field.is-wallpaper-mode,
+.pw-interlock-field.is-wallpaper-mode:active {
+  cursor: default;
+}
+.pw-interlock-world {
+  transform-origin: 0 0;
+  will-change: transform;
+  width: 0;
+  height: 0;
+}
+.pw-interlock-card {
+  background: color-mix(in srgb, var(--pw-ink) 5%, transparent);
+  contain: layout paint style;
+  cursor: pointer;
+  transform-origin: 50%;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  transition:
+    filter 0.16s,
+    box-shadow 0.18s,
+    left 0.3s cubic-bezier(0.2, 0.82, 0.22, 1),
+    top 0.3s cubic-bezier(0.2, 0.82, 0.22, 1),
+    width 0.3s cubic-bezier(0.2, 0.82, 0.22, 1),
+    height 0.3s cubic-bezier(0.2, 0.82, 0.22, 1);
+  display: block;
+  position: absolute;
+  overflow: hidden;
+}
+.pw-interlock-card img {
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
+  width: 100%;
+  height: 100%;
+  transition: opacity 0.22s;
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+.pw-interlock-card-base {
+  z-index: 1;
+}
+.pw-interlock-card-preview {
+  z-index: 0;
+  filter: saturate(0.94);
+}
+.pw-interlock-card-detail {
+  z-index: 2;
+}
+.pw-interlock-card img.is-loaded {
+  opacity: 1;
+}
+.pw-interlock-card img.is-failed {
+  opacity: 0;
+}
+.pw-interlock-card:hover {
+  z-index: 5;
+  filter: brightness(1.06) saturate(1.02);
+}
+.pw-interlock-app.is-wallpaper-mode .pw-interlock-card {
+  cursor: default;
+}
+.pw-interlock-app.is-wallpaper-mode .pw-interlock-card:hover {
+  filter: none;
+}
+.pw-interlock-card.is-focused {
+  z-index: 30;
+  box-shadow:
+    0 0 0 1px var(--pw-focus-edge),
+    0 0 0 4px var(--pw-focus-stroke),
+    0 0 0 5px var(--pw-focus-rim),
+    0 28px 76px var(--pw-shadow);
+}
+.pw-filmroll-world[data-camera-gap-adjusting] .pw-filmroll-card {
+  transition:
+    filter 0.16s,
+    opacity 0.16s,
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.18s;
+}
+.pw-filmroll-world[data-focus-motion] .pw-filmroll-card {
+  transition:
+    filter 0.16s,
+    opacity 0.16s,
+    transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.18s,
+    left 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    top 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.52s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.52s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pw-interlock-world[data-camera-gap-adjusting] .pw-interlock-card {
+  transition:
+    filter 0.16s,
+    box-shadow 0.18s;
+}
+.pw-interlock-app.is-reveal-pending .pw-interlock-card {
+  opacity: 0;
+  transform: translateY(-68px) scale(0.88);
+}
+.pw-interlock-app.has-focused-card .photo-wall-atmosphere {
+  filter: blur(8px) saturate(0.84);
+}
+.pw-interlock-app.is-exiting .pw-interlock-card {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pw-interlock-card,
+  .pw-interlock-card img {
+    transition: none;
+  }
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/photo-wall/pointer-idle.js"></script>
+    <title>照片墙</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("color-mode");
+          const mode =
+            stored === "light" || stored === "dark" ? stored : "auto";
+          document.documentElement.dataset.colorMode = mode;
+          document.documentElement.style.colorScheme =
+            mode === "auto" ? "light dark" : mode;
+        } catch {
+          document.documentElement.dataset.colorMode = "auto";
+        }
+      })();
+    </script>
+    <script
+      type="module"
+      crossorigin
+      src="/photo-wall/assets/index-eYugSr6J.js"
+    ></script>
+    <link
+      rel="stylesheet"
+      crossorigin
+      href="/photo-wall/assets/index-Bw9XBx1B.css"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

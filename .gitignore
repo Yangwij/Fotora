@@ -1,0 +1,39 @@
+# Installed and generated dependencies
+node_modules/
+
+# Build artifacts
+dist/
+release/
+release-optimized/
+out/
+*.asar
+
+# Runtime data and logs
+/data/
+logs/
+*.log
+
+# Local test profiles and generated test data
+.packaged-smoke-*/
+.tmp-*-test/
+.layout-check-data*/
+.photo-v1-*/
+
+# Local visual verification captures
+/settings-*.png
+/shortcuts-real-source.png
+
+# Downloaded/generated native runtime
+vendor/ffmpeg.exe
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example

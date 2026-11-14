@@ -1,0 +1,86 @@
+{
+  "name": "fotora",
+  "version": "1.0.3",
+  "private": true,
+  "description": "Fotora：本地桌面照片与视频管理应用",
+  "main": "electron/main.js",
+  "productName": "Fotora",
+  "author": "Fotora",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "config": {
+    "electron_mirror": "https://npmmirror.com/mirrors/electron/",
+    "electron_builder_binaries_mirror": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+  },
+  "scripts": {
+    "postinstall": "node scripts/setup-runtime.js",
+    "start": "electron .",
+    "server": "node server/index.js --open",
+    "check": "node scripts/check-runtime.js",
+    "test": "node --test \"tests/*.test.js\"",
+    "format": "prettier --write \"electron/**/*.js\" \"server/**/*.js\" \"web/**/*.{js,css,html}\" --ignore-path .prettierignore",
+    "dist": "npm test && npm run check && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.18.0",
+    "prettier": "3.9.10"
+  },
+  "build": {
+    "appId": "com.fotora.app",
+    "productName": "Fotora",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "files": [
+      "assets/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "web/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/ffmpeg.exe",
+        "to": "vendor/ffmpeg.exe"
+      },
+      {
+        "from": "vendor/exiftool",
+        "to": "exiftool"
+      },
+      {
+        "from": "vendor/dnglab/dnglab.exe",
+        "to": "dnglab/dnglab.exe"
+      },
+      {
+        "from": "assets/fotora.ico",
+        "to": "assets/fotora.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/fotora.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Fotora.${ext}",
+      "shortcutName": "Fotora",
+      "uninstallDisplayName": "Fotora"
+    },
+    "directories": {
+      "output": "release"
+    }
+  }
+}
