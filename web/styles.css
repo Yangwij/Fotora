@@ -990,6 +990,15 @@ html.no-root-directory .sidebar-hover-edge,
 html.no-root-directory .sidebar {
   display: none;
 }
+/* 首次导入前没有视图标题或顶栏操作，欢迎页直接占满整个内容区域。 */
+html.no-root-directory .toolbar {
+  display: none;
+}
+html.no-root-directory .content,
+html.no-root-directory.blur-titlebar:not(.transparent-titlebar) .content,
+html.no-root-directory.transparent-titlebar .content {
+  padding-top: 0;
+}
 /* 设置键贴在标题行右侧；按钮周围的渐变负责柔和盖住下方文字。 */
 .head-actions {
   position: absolute;

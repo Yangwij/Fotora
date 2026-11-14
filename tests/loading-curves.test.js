@@ -192,6 +192,14 @@ test("加载曲线速度、动态效果降级与空图库慢速节奏已定义",
   );
   assert.match(
     css,
+    /html\.no-root-directory \.toolbar\s*\{\s*display:\s*none;/,
+  );
+  assert.match(
+    css,
+    /html\.no-root-directory \.content,[\s\S]*html\.no-root-directory\.blur-titlebar:not\(\.transparent-titlebar\) \.content,[\s\S]*html\.no-root-directory\.transparent-titlebar \.content\s*\{\s*padding-top:\s*0;/,
+  );
+  assert.match(
+    css,
     /html\.no-root-directory \.empty-state\.welcome\s*\{\s*transform:\s*none;/,
   );
   assert.match(
