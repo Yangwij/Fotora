@@ -31728,7 +31728,11 @@ function fitViewerImageToStage(image = $("#viewerPhoto > img")) {
     image.naturalHeight,
     stage.width,
     stage.height,
-    { allowUpscale: viewerFitEnabled },
+    {
+      allowUpscale:
+        viewerFitEnabled ||
+        document.documentElement.classList.contains("is-fullscreen"),
+    },
   );
   if (!box) return null;
   /* 启用等比适配后显式写出最大展示尺寸；关闭时仍允许大图等比缩小，
@@ -31793,7 +31797,7 @@ function fitViewerVideoToStage(video = $("#viewerStage > video")) {
   video.style.height = `${videoHeight}px`;
   video.style.left = `${box.left - crop.x * videoWidth}px`;
   video.style.top = `${box.top - crop.y * videoHeight}px`;
-  video.style.objectFit = "fill";
+  video.style.objectFit = hasClientCrop ? "fill" : "contain";
   video.style.clipPath = hasClientCrop
     ? `inset(${crop.y * 100}% ${(1 - crop.x - crop.w) * 100}% ` +
       `${(1 - crop.y - crop.h) * 100}% ${crop.x * 100}%)`
@@ -38483,6 +38487,8 @@ let viewerFullscreenPending = false;
 async function toggleViewerFullscreen() {
   if (viewerFullscreenPending) return false;
   viewerFullscreenPending = true;
+  /* 先回到完整画面的等比尺寸；进入全屏后用户仍可继续手动缩放。 */
+  resetViewerZoom();
   const wasFullscreen =
     document.documentElement.classList.contains("is-fullscreen");
   document.dispatchEvent(new CustomEvent("album:fullscreen-will-change"));

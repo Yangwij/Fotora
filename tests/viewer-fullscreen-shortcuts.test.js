@@ -17,9 +17,30 @@ test("查看器中 Q 在普通窗口和全屏之间切换", () => {
   assert.match(toggle, /window\.albumWindow\?\.toggleFullscreen/);
   assert.match(toggle, /album:fullscreen-will-change/);
   assert.match(toggle, /album:fullscreen-changed/);
+  assert.match(toggle, /resetViewerZoom\(\);[\s\S]*?fullscreen-will-change/);
   assert.match(
     app,
     /\(key === "q" \|\| key === "Q"\)[\s\S]*?void toggleViewerFullscreen\(\);/,
+  );
+});
+
+test("查看器全屏按原始比例完整适配而不是裁剪铺满", () => {
+  const imageFit = app.slice(
+    app.indexOf("function fitViewerImageToStage"),
+    app.indexOf("function viewerVideoCrop"),
+  );
+  const videoFit = app.slice(
+    app.indexOf("function fitViewerVideoToStage"),
+    app.indexOf("function viewerVideoVisibleRect"),
+  );
+  assert.match(imageFit, /viewerContainBox\(/);
+  assert.match(
+    imageFit,
+    /document\.documentElement\.classList\.contains\("is-fullscreen"\)/,
+  );
+  assert.match(
+    videoFit,
+    /video\.style\.objectFit = hasClientCrop \? "fill" : "contain"/,
   );
 });
 
