@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="/photo-wall/pointer-idle.js"></script>
+    <title>照片墙</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("color-mode");
+          const mode =
+            stored === "light" || stored === "dark" ? stored : "auto";
+          document.documentElement.dataset.colorMode = mode;
+          const theme = localStorage.getItem("color-theme");
+          document.documentElement.dataset.colorTheme = [
+            "warm",
+            "mist",
+            "claude",
+          ].includes(theme)
+            ? theme
+            : "default";
+          document.documentElement.style.colorScheme =
+            mode === "auto" ? "light dark" : mode;
+        } catch {
+          document.documentElement.dataset.colorMode = "auto";
+          document.documentElement.dataset.colorTheme = "default";
+        }
+      })();
+    </script>
+    <script src="/ui-language.js?v=2"></script>
+    <script src="/theme-bridge.js"></script>
+    <script
+      type="module"
+      crossorigin
+      src="/photo-wall/assets/index-eYugSr6J.js"
+    ></script>
+    <link
+      rel="stylesheet"
+      crossorigin
+      href="/photo-wall/assets/index-Bw9XBx1B.css"
+    />
+    <link rel="stylesheet" href="/motion.css" />
+    <link rel="stylesheet" href="/theme-palettes.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

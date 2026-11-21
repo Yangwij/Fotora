@@ -1,0 +1,9 @@
+node_modules/
+vendor/
+release/
+dist/
+out/
+package-lock.json
+web/map/vendor/
+web/photo-wall/assets/
+web/fonts/*.css

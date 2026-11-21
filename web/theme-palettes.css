@@ -1,0 +1,676 @@
+/* Fotora 配色主题。
+   只覆盖颜色、强调色和标题字体的气质，不改变主界面结构、控件顺序或照片布局。 */
+
+@import url("./fonts/noto-sans-sc.css");
+@import url("./fonts/noto-serif-sc.css");
+
+@font-face {
+  font-family: "Fotora Inter";
+  src: url("./fonts/Inter-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Fotora Source Serif";
+  src: url("./fonts/SourceSerif4-Variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+
+:root[data-color-theme="warm"] {
+  --sidebar-bg: #f2eee6;
+  --main-bg: #fbf9f4;
+  --text: #2a2620;
+  --text-2: #756d62;
+  --text-3: #aaa092;
+  --accent: #c66a47;
+  --accent-shadow: rgba(198, 106, 71, 0.28);
+  --accent-hover: rgba(198, 106, 71, 0.15);
+  --glyph-blue: #b85e3e;
+  --hover: rgba(65, 52, 36, 0.055);
+  --camera-device-selected: rgba(65, 52, 36, 0.035);
+  --sep: rgba(65, 52, 36, 0.1);
+  --nav-shadow: rgba(58, 42, 25, 0.15);
+  --resizer-line: #c6b9a7;
+  --select: rgba(126, 91, 58, 0.13);
+  --select-strong: rgba(126, 91, 58, 0.19);
+  --tile-empty: #ece6dc;
+  --tile-empty-glyph: #b4aa9c;
+  --field-bg: rgba(65, 52, 36, 0.055);
+  --field-bg-menu-open: rgba(65, 52, 36, 0.085);
+  --toolbar-bg: rgba(251, 249, 244, 0.8);
+  --blur-titlebar-surface: rgba(251, 249, 244, 0.84);
+  --sheet-bg: rgba(250, 247, 240, 0.94);
+  --sheet-solid-bg: #f8f4ec;
+  --library-picker-edge-bg: #f8f4ec;
+  --filter-menu-bg: rgba(250, 247, 240, 0.985);
+  --dialog-sep: rgba(65, 52, 36, 0.2);
+  --window-frame-bg: #e3dcd0;
+  --theme-display-font: "Fotora Source Serif", "Noto Serif SC", serif;
+  --font-anthropic-sans: "Fotora Inter", "Noto Sans SC", sans-serif;
+  --font-anthropic-serif: "Fotora Source Serif", "Noto Serif SC", serif;
+  --pw-paper: #f4efe7;
+  --pw-ink: #2a2620;
+  --pw-placeholder: #ddd4c6;
+  --pw-shadow: rgba(77, 54, 30, 0.22);
+  --pw-focus-edge: rgba(255, 253, 248, 0.82);
+  --pw-focus-stroke: #2a2620;
+  --pw-focus-rim: rgba(255, 253, 248, 0.46);
+}
+
+:root[data-color-theme="claude"] {
+  --sidebar-bg: #f0ede5;
+  --main-bg: #faf9f5;
+  --text: #141413;
+  --text-2: #615e57;
+  --text-3: #918d84;
+  --accent: #d97757;
+  --accent-shadow: rgba(217, 119, 87, 0.3);
+  --accent-hover: rgba(217, 119, 87, 0.14);
+  --glyph-blue: #c36749;
+  --hover: rgba(20, 20, 19, 0.055);
+  --camera-device-selected: rgba(20, 20, 19, 0.035);
+  --sep: rgba(20, 20, 19, 0.1);
+  --nav-shadow: rgba(45, 38, 28, 0.16);
+  --resizer-line: #c8c0b1;
+  --select: rgba(217, 119, 87, 0.14);
+  --select-strong: rgba(217, 119, 87, 0.2);
+  --tile-empty: #ebe7de;
+  --tile-empty-glyph: #b1aa9e;
+  --field-bg: rgba(20, 20, 19, 0.052);
+  --field-bg-menu-open: rgba(20, 20, 19, 0.08);
+  --toolbar-bg: rgba(250, 249, 245, 0.82);
+  --blur-titlebar-surface: rgba(250, 249, 245, 0.86);
+  --sheet-bg: rgba(247, 245, 239, 0.95);
+  --sheet-solid-bg: #f5f2eb;
+  --library-picker-edge-bg: #f5f2eb;
+  --filter-menu-bg: rgba(247, 245, 239, 0.985);
+  --dialog-sep: rgba(20, 20, 19, 0.2);
+  --window-frame-bg: #e5e0d5;
+  --theme-display-font: "Fotora Source Serif", "Noto Serif SC", serif;
+  --font-anthropic-sans: "Fotora Inter", "Noto Sans SC", sans-serif;
+  --font-anthropic-serif: "Fotora Source Serif", "Noto Serif SC", serif;
+  --pw-paper: #f3f0e8;
+  --pw-ink: #141413;
+  --pw-placeholder: #dcd6ca;
+  --pw-shadow: rgba(66, 52, 34, 0.22);
+  --pw-focus-edge: rgba(255, 253, 248, 0.84);
+  --pw-focus-stroke: #141413;
+  --pw-focus-rim: rgba(255, 253, 248, 0.48);
+}
+
+:root[data-color-theme="mist"] {
+  --sidebar-bg: #edf2f3;
+  --main-bg: #f8fafb;
+  --text: #21282d;
+  --text-2: #68747b;
+  --text-3: #9ca6ac;
+  --accent: #537d98;
+  --accent-shadow: rgba(83, 125, 152, 0.28);
+  --accent-hover: rgba(83, 125, 152, 0.14);
+  --glyph-blue: #466f89;
+  --hover: rgba(31, 48, 57, 0.052);
+  --camera-device-selected: rgba(31, 48, 57, 0.034);
+  --sep: rgba(31, 48, 57, 0.095);
+  --nav-shadow: rgba(22, 38, 46, 0.14);
+  --resizer-line: #b8c5cb;
+  --select: rgba(69, 105, 126, 0.12);
+  --select-strong: rgba(69, 105, 126, 0.18);
+  --tile-empty: #e7edef;
+  --tile-empty-glyph: #a8b4b9;
+  --field-bg: rgba(31, 48, 57, 0.052);
+  --field-bg-menu-open: rgba(31, 48, 57, 0.082);
+  --toolbar-bg: rgba(248, 250, 251, 0.8);
+  --blur-titlebar-surface: rgba(248, 250, 251, 0.84);
+  --sheet-bg: rgba(247, 250, 251, 0.94);
+  --sheet-solid-bg: #f6f9fa;
+  --library-picker-edge-bg: #f6f9fa;
+  --filter-menu-bg: rgba(247, 250, 251, 0.985);
+  --dialog-sep: rgba(31, 48, 57, 0.2);
+  --window-frame-bg: #dce5e8;
+  --theme-display-font: "Fotora Inter", "Noto Sans SC", sans-serif;
+  --font-anthropic-sans: "Fotora Inter", "Noto Sans SC", sans-serif;
+  --font-anthropic-serif: "Fotora Source Serif", "Noto Serif SC", serif;
+  --pw-paper: #eef4f6;
+  --pw-ink: #21282d;
+  --pw-placeholder: #d7e1e5;
+  --pw-shadow: rgba(25, 45, 56, 0.2);
+  --pw-focus-edge: rgba(253, 255, 255, 0.82);
+  --pw-focus-stroke: #21282d;
+  --pw-focus-rim: rgba(253, 255, 255, 0.46);
+}
+
+:root[data-color-theme="warm"][data-color-mode="dark"] {
+  --sidebar-bg: #1b1a17;
+  --main-bg: #211f1b;
+  --text: #f0ebe2;
+  --text-2: #aaa195;
+  --text-3: #736c62;
+  --accent: #d27a57;
+  --accent-shadow: rgba(210, 122, 87, 0.28);
+  --accent-hover: rgba(210, 122, 87, 0.17);
+  --glyph-blue: #d98564;
+  --hover: rgba(255, 247, 236, 0.065);
+  --camera-device-selected: rgba(255, 247, 236, 0.045);
+  --sep: rgba(255, 247, 236, 0.105);
+  --nav-shadow: rgba(0, 0, 0, 0.5);
+  --resizer-line: #696159;
+  --select: rgba(241, 225, 204, 0.16);
+  --select-strong: rgba(241, 225, 204, 0.23);
+  --tile-empty: #2d2a25;
+  --tile-empty-glyph: #6e675e;
+  --field-bg: rgba(255, 247, 236, 0.085);
+  --field-bg-menu-open: rgba(255, 247, 236, 0.12);
+  --toolbar-bg: rgba(33, 31, 27, 0.8);
+  --blur-titlebar-surface: rgba(33, 31, 27, 0.86);
+  --sheet-bg: rgba(44, 41, 35, 0.95);
+  --sheet-solid-bg: #2c2923;
+  --library-picker-edge-bg: #2c2923;
+  --filter-menu-bg: rgba(44, 41, 35, 0.985);
+  --dialog-sep: rgba(255, 247, 236, 0.22);
+  --window-frame-bg: #11120f;
+  --pw-paper: #191815;
+  --pw-ink: #f0ebe2;
+  --pw-placeholder: #302c26;
+  --pw-shadow: rgba(0, 0, 0, 0.55);
+  --pw-focus-edge: rgba(0, 0, 0, 0.66);
+  --pw-focus-stroke: #f0ebe2;
+  --pw-focus-rim: rgba(0, 0, 0, 0.42);
+}
+
+:root[data-color-theme="claude"][data-color-mode="dark"] {
+  --sidebar-bg: #211f1d;
+  --main-bg: #262624;
+  --text: #f3f0e8;
+  --text-2: #aaa49a;
+  --text-3: #716c65;
+  --accent: #e18a68;
+  --accent-shadow: rgba(225, 138, 104, 0.28);
+  --accent-hover: rgba(225, 138, 104, 0.17);
+  --glyph-blue: #e39170;
+  --hover: rgba(250, 247, 239, 0.065);
+  --camera-device-selected: rgba(250, 247, 239, 0.045);
+  --sep: rgba(250, 247, 239, 0.105);
+  --nav-shadow: rgba(0, 0, 0, 0.52);
+  --resizer-line: #6e6861;
+  --select: rgba(225, 138, 104, 0.17);
+  --select-strong: rgba(225, 138, 104, 0.24);
+  --tile-empty: #302e2a;
+  --tile-empty-glyph: #746e66;
+  --field-bg: rgba(250, 247, 239, 0.082);
+  --field-bg-menu-open: rgba(250, 247, 239, 0.115);
+  --toolbar-bg: rgba(38, 38, 36, 0.82);
+  --blur-titlebar-surface: rgba(38, 38, 36, 0.87);
+  --sheet-bg: rgba(48, 45, 41, 0.95);
+  --sheet-solid-bg: #302d29;
+  --library-picker-edge-bg: #302d29;
+  --filter-menu-bg: rgba(48, 45, 41, 0.985);
+  --dialog-sep: rgba(250, 247, 239, 0.22);
+  --window-frame-bg: #151514;
+  --pw-paper: #1c1b19;
+  --pw-ink: #f3f0e8;
+  --pw-placeholder: #35322e;
+  --pw-shadow: rgba(0, 0, 0, 0.56);
+  --pw-focus-edge: rgba(0, 0, 0, 0.68);
+  --pw-focus-stroke: #f3f0e8;
+  --pw-focus-rim: rgba(0, 0, 0, 0.44);
+}
+
+:root[data-color-theme="mist"][data-color-mode="dark"] {
+  --sidebar-bg: #15191c;
+  --main-bg: #191d20;
+  --text: #edf3f5;
+  --text-2: #9ba7ad;
+  --text-3: #68747a;
+  --accent: #72a2bd;
+  --accent-shadow: rgba(114, 162, 189, 0.27);
+  --accent-hover: rgba(114, 162, 189, 0.16);
+  --glyph-blue: #79a8c2;
+  --hover: rgba(237, 247, 250, 0.062);
+  --camera-device-selected: rgba(237, 247, 250, 0.043);
+  --sep: rgba(237, 247, 250, 0.1);
+  --nav-shadow: rgba(0, 0, 0, 0.5);
+  --resizer-line: #5f6b70;
+  --select: rgba(204, 225, 233, 0.15);
+  --select-strong: rgba(204, 225, 233, 0.22);
+  --tile-empty: #252d31;
+  --tile-empty-glyph: #66747b;
+  --field-bg: rgba(237, 247, 250, 0.08);
+  --field-bg-menu-open: rgba(237, 247, 250, 0.115);
+  --toolbar-bg: rgba(25, 29, 32, 0.8);
+  --blur-titlebar-surface: rgba(25, 29, 32, 0.86);
+  --sheet-bg: rgba(36, 43, 47, 0.95);
+  --sheet-solid-bg: #242b2f;
+  --library-picker-edge-bg: #242b2f;
+  --filter-menu-bg: rgba(36, 43, 47, 0.985);
+  --dialog-sep: rgba(237, 247, 250, 0.22);
+  --window-frame-bg: #0e1316;
+  --theme-display-font: "Fotora Inter", "Noto Sans SC", sans-serif;
+  --pw-paper: #151a1d;
+  --pw-ink: #edf3f5;
+  --pw-placeholder: #293237;
+  --pw-shadow: rgba(0, 0, 0, 0.55);
+  --pw-focus-edge: rgba(0, 0, 0, 0.66);
+  --pw-focus-stroke: #edf3f5;
+  --pw-focus-rim: rgba(0, 0, 0, 0.42);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-color-theme="warm"][data-color-mode="auto"] {
+    --sidebar-bg: #1b1a17;
+    --main-bg: #211f1b;
+    --text: #f0ebe2;
+    --text-2: #aaa195;
+    --text-3: #736c62;
+    --accent: #d27a57;
+    --accent-shadow: rgba(210, 122, 87, 0.28);
+    --accent-hover: rgba(210, 122, 87, 0.17);
+    --glyph-blue: #d98564;
+    --hover: rgba(255, 247, 236, 0.065);
+    --camera-device-selected: rgba(255, 247, 236, 0.045);
+    --sep: rgba(255, 247, 236, 0.105);
+    --nav-shadow: rgba(0, 0, 0, 0.5);
+    --resizer-line: #696159;
+    --select: rgba(241, 225, 204, 0.16);
+    --select-strong: rgba(241, 225, 204, 0.23);
+    --tile-empty: #2d2a25;
+    --tile-empty-glyph: #6e675e;
+    --field-bg: rgba(255, 247, 236, 0.085);
+    --field-bg-menu-open: rgba(255, 247, 236, 0.12);
+    --toolbar-bg: rgba(33, 31, 27, 0.8);
+    --blur-titlebar-surface: rgba(33, 31, 27, 0.86);
+    --sheet-bg: rgba(44, 41, 35, 0.95);
+    --sheet-solid-bg: #2c2923;
+    --library-picker-edge-bg: #2c2923;
+    --filter-menu-bg: rgba(44, 41, 35, 0.985);
+    --dialog-sep: rgba(255, 247, 236, 0.22);
+    --window-frame-bg: #11120f;
+    --pw-paper: #191815;
+    --pw-ink: #f0ebe2;
+    --pw-placeholder: #302c26;
+    --pw-shadow: rgba(0, 0, 0, 0.55);
+    --pw-focus-edge: rgba(0, 0, 0, 0.66);
+    --pw-focus-stroke: #f0ebe2;
+    --pw-focus-rim: rgba(0, 0, 0, 0.42);
+  }
+
+  :root[data-color-theme="claude"][data-color-mode="auto"] {
+    --sidebar-bg: #211f1d;
+    --main-bg: #262624;
+    --text: #f3f0e8;
+    --text-2: #aaa49a;
+    --text-3: #716c65;
+    --accent: #e18a68;
+    --accent-shadow: rgba(225, 138, 104, 0.28);
+    --accent-hover: rgba(225, 138, 104, 0.17);
+    --glyph-blue: #e39170;
+    --hover: rgba(250, 247, 239, 0.065);
+    --camera-device-selected: rgba(250, 247, 239, 0.045);
+    --sep: rgba(250, 247, 239, 0.105);
+    --nav-shadow: rgba(0, 0, 0, 0.52);
+    --resizer-line: #6e6861;
+    --select: rgba(225, 138, 104, 0.17);
+    --select-strong: rgba(225, 138, 104, 0.24);
+    --tile-empty: #302e2a;
+    --tile-empty-glyph: #746e66;
+    --field-bg: rgba(250, 247, 239, 0.082);
+    --field-bg-menu-open: rgba(250, 247, 239, 0.115);
+    --toolbar-bg: rgba(38, 38, 36, 0.82);
+    --blur-titlebar-surface: rgba(38, 38, 36, 0.87);
+    --sheet-bg: rgba(48, 45, 41, 0.95);
+    --sheet-solid-bg: #302d29;
+    --library-picker-edge-bg: #302d29;
+    --filter-menu-bg: rgba(48, 45, 41, 0.985);
+    --dialog-sep: rgba(250, 247, 239, 0.22);
+    --window-frame-bg: #151514;
+    --pw-paper: #1c1b19;
+    --pw-ink: #f3f0e8;
+    --pw-placeholder: #35322e;
+    --pw-shadow: rgba(0, 0, 0, 0.56);
+    --pw-focus-edge: rgba(0, 0, 0, 0.68);
+    --pw-focus-stroke: #f3f0e8;
+    --pw-focus-rim: rgba(0, 0, 0, 0.44);
+  }
+
+  :root[data-color-theme="mist"][data-color-mode="auto"] {
+    --sidebar-bg: #15191c;
+    --main-bg: #191d20;
+    --text: #edf3f5;
+    --text-2: #9ba7ad;
+    --text-3: #68747a;
+    --accent: #72a2bd;
+    --accent-shadow: rgba(114, 162, 189, 0.27);
+    --accent-hover: rgba(114, 162, 189, 0.16);
+    --glyph-blue: #79a8c2;
+    --hover: rgba(237, 247, 250, 0.062);
+    --camera-device-selected: rgba(237, 247, 250, 0.043);
+    --sep: rgba(237, 247, 250, 0.1);
+    --nav-shadow: rgba(0, 0, 0, 0.5);
+    --resizer-line: #5f6b70;
+    --select: rgba(204, 225, 233, 0.15);
+    --select-strong: rgba(204, 225, 233, 0.22);
+    --tile-empty: #252d31;
+    --tile-empty-glyph: #66747b;
+    --field-bg: rgba(237, 247, 250, 0.08);
+    --field-bg-menu-open: rgba(237, 247, 250, 0.115);
+    --toolbar-bg: rgba(25, 29, 32, 0.8);
+    --blur-titlebar-surface: rgba(25, 29, 32, 0.86);
+    --sheet-bg: rgba(36, 43, 47, 0.95);
+    --sheet-solid-bg: #242b2f;
+    --library-picker-edge-bg: #242b2f;
+    --filter-menu-bg: rgba(36, 43, 47, 0.985);
+    --dialog-sep: rgba(237, 247, 250, 0.22);
+    --window-frame-bg: #0e1316;
+    --pw-paper: #151a1d;
+    --pw-ink: #edf3f5;
+    --pw-placeholder: #293237;
+    --pw-shadow: rgba(0, 0, 0, 0.55);
+    --pw-focus-edge: rgba(0, 0, 0, 0.66);
+    --pw-focus-stroke: #edf3f5;
+    --pw-focus-rim: rgba(0, 0, 0, 0.42);
+  }
+}
+
+/* 界面语言会切换对应字体和字距；按钮、行高与容器由现有布局自然适配。 */
+:root[data-font-theme="anthropic"][data-color-theme] body {
+  font-family: var(--font-anthropic-sans);
+}
+
+/* English mode uses Source Serif 4 for every visible glyph, including
+   numbers, counters, dates, shortcuts and technical metadata. */
+:root[data-font-theme="anthropic"] body,
+:root[data-font-theme="anthropic"] body * {
+  font-family: "Fotora Source Serif", "Noto Serif SC", serif !important;
+}
+
+:root[data-font-theme="anthropic"][data-color-theme] .sidebar-title,
+:root[data-font-theme="anthropic"][data-color-theme] .toolbar-title,
+:root[data-font-theme="anthropic"][data-color-theme] .ux-settings-title {
+  font-family: var(--font-anthropic-serif);
+  letter-spacing: -0.018em;
+}
+
+:root[data-font-theme="pingfang"][data-color-theme] body,
+:root[data-font-theme="pingfang"][data-color-theme] .sidebar-title,
+:root[data-font-theme="pingfang"][data-color-theme] .toolbar-title,
+:root[data-font-theme="pingfang"][data-color-theme] .ux-settings-title {
+  font-family: "Noto Sans SC", sans-serif;
+  letter-spacing: 0;
+}
+
+/* 标题使用主题字体，正文与控件尺寸保持稳定。 */
+:root[data-color-theme="warm"] .sidebar-title,
+:root[data-color-theme="warm"] .toolbar-title {
+  font-family: var(--theme-display-font);
+  letter-spacing: -0.022em;
+}
+
+:root[data-color-theme="claude"] .sidebar-title,
+:root[data-color-theme="claude"] .toolbar-title {
+  font-family: var(--theme-display-font);
+  letter-spacing: -0.024em;
+}
+
+:root[data-color-theme="mist"] .sidebar-title,
+:root[data-color-theme="mist"] .toolbar-title {
+  font-family: var(--theme-display-font);
+  letter-spacing: -0.014em;
+}
+
+:root[data-color-theme="warm"] .nav-item,
+:root[data-color-theme="warm"] .album-name {
+  letter-spacing: 0.012em;
+}
+
+:root[data-color-theme="claude"] .nav-item,
+:root[data-color-theme="claude"] .album-name {
+  letter-spacing: 0.014em;
+}
+
+/* 地图与照片墙是 iframe，它们各自读取同一组主题变量。 */
+:root[data-color-theme="warm"] {
+  --glass-bg: rgba(250, 247, 240, 0.78);
+  --glass-strong: rgba(250, 247, 240, 0.92);
+  --glass-border: rgba(255, 252, 246, 0.64);
+  --glass-shadow:
+    0 8px 28px rgba(76, 52, 29, 0.22), 0 1px 4px rgba(76, 52, 29, 0.13);
+  --ink: #2a2620;
+  --muted: rgba(42, 38, 32, 0.57);
+  --hover: rgba(198, 106, 71, 0.11);
+  --globe-ink: #2a2620;
+  --globe-muted: rgba(42, 38, 32, 0.58);
+  --globe-glass: rgba(250, 247, 240, 0.88);
+  --globe-glass-border: rgba(255, 252, 246, 0.72);
+  --globe-search-sheet: rgba(250, 247, 240, 0.94);
+  --globe-search-active-surface: #faf7f0;
+  --globe-search-ink: #2a2620;
+  --globe-search-muted: rgba(42, 38, 32, 0.58);
+  --globe-control-surface: color-mix(in srgb, #fbf9f4 40%, transparent);
+  --globe-control-outline: color-mix(in srgb, #2a2620 11%, transparent);
+  --globe-shadow:
+    0 7px 24px rgba(74, 51, 29, 0.2), 0 1px 4px rgba(74, 51, 29, 0.13);
+}
+
+:root[data-color-theme="claude"] {
+  --glass-bg: rgba(250, 249, 245, 0.8);
+  --glass-strong: rgba(250, 249, 245, 0.93);
+  --glass-border: rgba(255, 254, 250, 0.68);
+  --glass-shadow:
+    0 8px 28px rgba(66, 52, 34, 0.2), 0 1px 4px rgba(66, 52, 34, 0.12);
+  --ink: #141413;
+  --muted: rgba(20, 20, 19, 0.57);
+  --hover: rgba(217, 119, 87, 0.11);
+  --globe-ink: #141413;
+  --globe-muted: rgba(20, 20, 19, 0.58);
+  --globe-glass: rgba(250, 249, 245, 0.9);
+  --globe-glass-border: rgba(255, 254, 250, 0.74);
+  --globe-search-sheet: rgba(247, 245, 239, 0.95);
+  --globe-search-active-surface: #faf9f5;
+  --globe-search-ink: #141413;
+  --globe-search-muted: rgba(20, 20, 19, 0.58);
+  --globe-control-surface: color-mix(in srgb, #faf9f5 40%, transparent);
+  --globe-control-outline: color-mix(in srgb, #141413 11%, transparent);
+  --globe-shadow:
+    0 7px 24px rgba(66, 52, 34, 0.2), 0 1px 4px rgba(66, 52, 34, 0.12);
+}
+
+:root[data-color-theme="mist"] {
+  --glass-bg: rgba(247, 250, 251, 0.78);
+  --glass-strong: rgba(247, 250, 251, 0.92);
+  --glass-border: rgba(255, 255, 255, 0.66);
+  --glass-shadow:
+    0 8px 28px rgba(24, 44, 56, 0.2), 0 1px 4px rgba(24, 44, 56, 0.12);
+  --ink: #21282d;
+  --muted: rgba(33, 40, 45, 0.57);
+  --hover: rgba(83, 125, 152, 0.1);
+  --globe-ink: #21282d;
+  --globe-muted: rgba(33, 40, 45, 0.58);
+  --globe-glass: rgba(247, 250, 251, 0.88);
+  --globe-glass-border: rgba(255, 255, 255, 0.72);
+  --globe-search-sheet: rgba(247, 250, 251, 0.94);
+  --globe-search-active-surface: #f7fafb;
+  --globe-search-ink: #21282d;
+  --globe-search-muted: rgba(33, 40, 45, 0.58);
+  --globe-control-surface: color-mix(in srgb, #ffffff 32%, transparent);
+  --globe-control-outline: color-mix(in srgb, #21282d 11%, transparent);
+  --globe-shadow:
+    0 7px 24px rgba(22, 43, 55, 0.2), 0 1px 4px rgba(22, 43, 55, 0.12);
+}
+
+:root[data-color-theme="warm"][data-color-mode="dark"] {
+  --glass-bg: rgba(36, 33, 28, 0.8);
+  --glass-strong: rgba(36, 33, 28, 0.94);
+  --glass-border: rgba(255, 245, 231, 0.14);
+  --glass-shadow: 0 9px 30px rgba(0, 0, 0, 0.44), 0 1px 4px rgba(0, 0, 0, 0.32);
+  --ink: #f0ebe2;
+  --muted: rgba(240, 235, 226, 0.58);
+  --hover: rgba(210, 122, 87, 0.15);
+  --globe-ink: #f0ebe2;
+  --globe-muted: rgba(240, 235, 226, 0.62);
+  --globe-glass: rgba(30, 28, 24, 0.78);
+  --globe-glass-border: rgba(255, 245, 231, 0.14);
+  --globe-search-sheet: rgba(44, 41, 35, 0.95);
+  --globe-search-active-surface: #2c2923;
+  --globe-search-ink: #f0ebe2;
+  --globe-search-muted: rgba(240, 235, 226, 0.62);
+  --globe-control-surface: color-mix(in srgb, #211f1b 34%, transparent);
+  --globe-control-outline: color-mix(in srgb, #f0ebe2 11%, transparent);
+  --globe-shadow: 0 8px 26px rgba(0, 0, 0, 0.48), 0 1px 4px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-color-theme="claude"][data-color-mode="dark"] {
+  --glass-bg: rgba(38, 38, 36, 0.82);
+  --glass-strong: rgba(38, 38, 36, 0.95);
+  --glass-border: rgba(250, 247, 239, 0.14);
+  --glass-shadow: 0 9px 30px rgba(0, 0, 0, 0.46), 0 1px 4px rgba(0, 0, 0, 0.34);
+  --ink: #f3f0e8;
+  --muted: rgba(243, 240, 232, 0.58);
+  --hover: rgba(225, 138, 104, 0.15);
+  --globe-ink: #f3f0e8;
+  --globe-muted: rgba(243, 240, 232, 0.62);
+  --globe-glass: rgba(31, 30, 28, 0.8);
+  --globe-glass-border: rgba(250, 247, 239, 0.14);
+  --globe-search-sheet: rgba(48, 45, 41, 0.95);
+  --globe-search-active-surface: #302d29;
+  --globe-search-ink: #f3f0e8;
+  --globe-search-muted: rgba(243, 240, 232, 0.62);
+  --globe-control-surface: color-mix(in srgb, #262624 34%, transparent);
+  --globe-control-outline: color-mix(in srgb, #f3f0e8 11%, transparent);
+  --globe-shadow: 0 8px 26px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.36);
+}
+
+:root[data-color-theme="mist"][data-color-mode="dark"] {
+  --glass-bg: rgba(29, 35, 39, 0.8);
+  --glass-strong: rgba(29, 35, 39, 0.94);
+  --glass-border: rgba(229, 243, 249, 0.14);
+  --glass-shadow: 0 9px 30px rgba(0, 0, 0, 0.44), 0 1px 4px rgba(0, 0, 0, 0.32);
+  --ink: #edf3f5;
+  --muted: rgba(237, 243, 245, 0.58);
+  --hover: rgba(114, 162, 189, 0.14);
+  --globe-ink: #edf3f5;
+  --globe-muted: rgba(237, 243, 245, 0.62);
+  --globe-glass: rgba(20, 27, 31, 0.78);
+  --globe-glass-border: rgba(229, 243, 249, 0.14);
+  --globe-search-sheet: rgba(36, 43, 47, 0.95);
+  --globe-search-active-surface: #242b2f;
+  --globe-search-ink: #edf3f5;
+  --globe-search-muted: rgba(237, 243, 245, 0.62);
+  --globe-control-surface: color-mix(in srgb, #191d20 34%, transparent);
+  --globe-control-outline: color-mix(in srgb, #edf3f5 11%, transparent);
+  --globe-shadow: 0 8px 26px rgba(0, 0, 0, 0.48), 0 1px 4px rgba(0, 0, 0, 0.34);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-color-theme="warm"][data-color-mode="auto"] {
+    --glass-bg: rgba(36, 33, 28, 0.8);
+    --glass-strong: rgba(36, 33, 28, 0.94);
+    --glass-border: rgba(255, 245, 231, 0.14);
+    --glass-shadow:
+      0 9px 30px rgba(0, 0, 0, 0.44), 0 1px 4px rgba(0, 0, 0, 0.32);
+    --ink: #f0ebe2;
+    --muted: rgba(240, 235, 226, 0.58);
+    --hover: rgba(210, 122, 87, 0.15);
+    --globe-ink: #f0ebe2;
+    --globe-muted: rgba(240, 235, 226, 0.62);
+    --globe-glass: rgba(30, 28, 24, 0.78);
+    --globe-glass-border: rgba(255, 245, 231, 0.14);
+    --globe-search-sheet: rgba(44, 41, 35, 0.95);
+    --globe-search-active-surface: #2c2923;
+    --globe-search-ink: #f0ebe2;
+    --globe-search-muted: rgba(240, 235, 226, 0.62);
+    --globe-control-surface: color-mix(in srgb, #211f1b 34%, transparent);
+    --globe-control-outline: color-mix(in srgb, #f0ebe2 11%, transparent);
+    --globe-shadow:
+      0 8px 26px rgba(0, 0, 0, 0.48), 0 1px 4px rgba(0, 0, 0, 0.34);
+  }
+
+  :root[data-color-theme="claude"][data-color-mode="auto"] {
+    --glass-bg: rgba(38, 38, 36, 0.82);
+    --glass-strong: rgba(38, 38, 36, 0.95);
+    --glass-border: rgba(250, 247, 239, 0.14);
+    --glass-shadow:
+      0 9px 30px rgba(0, 0, 0, 0.46), 0 1px 4px rgba(0, 0, 0, 0.34);
+    --ink: #f3f0e8;
+    --muted: rgba(243, 240, 232, 0.58);
+    --hover: rgba(225, 138, 104, 0.15);
+    --globe-ink: #f3f0e8;
+    --globe-muted: rgba(243, 240, 232, 0.62);
+    --globe-glass: rgba(31, 30, 28, 0.8);
+    --globe-glass-border: rgba(250, 247, 239, 0.14);
+    --globe-search-sheet: rgba(48, 45, 41, 0.95);
+    --globe-search-active-surface: #302d29;
+    --globe-search-ink: #f3f0e8;
+    --globe-search-muted: rgba(243, 240, 232, 0.62);
+    --globe-control-surface: color-mix(in srgb, #262624 34%, transparent);
+    --globe-control-outline: color-mix(in srgb, #f3f0e8 11%, transparent);
+    --globe-shadow:
+      0 8px 26px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.36);
+  }
+
+  :root[data-color-theme="mist"][data-color-mode="auto"] {
+    --glass-bg: rgba(29, 35, 39, 0.8);
+    --glass-strong: rgba(29, 35, 39, 0.94);
+    --glass-border: rgba(229, 243, 249, 0.14);
+    --glass-shadow:
+      0 9px 30px rgba(0, 0, 0, 0.44), 0 1px 4px rgba(0, 0, 0, 0.32);
+    --ink: #edf3f5;
+    --muted: rgba(237, 243, 245, 0.58);
+    --hover: rgba(114, 162, 189, 0.14);
+    --globe-ink: #edf3f5;
+    --globe-muted: rgba(237, 243, 245, 0.62);
+    --globe-glass: rgba(20, 27, 31, 0.78);
+    --globe-glass-border: rgba(229, 243, 249, 0.14);
+    --globe-search-sheet: rgba(36, 43, 47, 0.95);
+    --globe-search-active-surface: #242b2f;
+    --globe-search-ink: #edf3f5;
+    --globe-search-muted: rgba(237, 243, 245, 0.62);
+    --globe-control-surface: color-mix(in srgb, #191d20 34%, transparent);
+    --globe-control-outline: color-mix(in srgb, #edf3f5 11%, transparent);
+    --globe-shadow:
+      0 8px 26px rgba(0, 0, 0, 0.48), 0 1px 4px rgba(0, 0, 0, 0.34);
+  }
+}
+
+/* 照片查看和编辑舞台保持中性深色，避免主题色影响照片判断。 */
+:root[data-color-theme="warm"] .viewer {
+  --viewer-ink: #f0ebe2;
+  --viewer-muted: rgba(240, 235, 226, 0.58);
+  --viewer-wash: rgba(27, 25, 21, 0.7);
+  --viewer-pill: rgba(48, 44, 38, 0.94);
+}
+
+:root[data-color-theme="claude"] .viewer {
+  --viewer-ink: #f3f0e8;
+  --viewer-muted: rgba(243, 240, 232, 0.58);
+  --viewer-wash: rgba(28, 27, 25, 0.72);
+  --viewer-pill: rgba(49, 46, 42, 0.94);
+}
+
+:root[data-color-theme="mist"] .viewer {
+  --viewer-ink: #edf3f5;
+  --viewer-muted: rgba(237, 243, 245, 0.58);
+  --viewer-wash: rgba(22, 27, 30, 0.7);
+  --viewer-pill: rgba(39, 47, 51, 0.94);
+}
+
+/* 弹层与轻提示沿用主题色，但不改动位置、尺寸和动画。 */
+:root[data-color-theme="warm"] .ux-settings-layer {
+  background: rgba(45, 33, 20, 0.32);
+}
+
+:root[data-color-theme="claude"] .ux-settings-layer {
+  background: rgba(37, 31, 25, 0.32);
+}
+
+:root[data-color-theme="mist"] .ux-settings-layer {
+  background: rgba(20, 35, 44, 0.32);
+}
+
+:root[data-color-theme] .context-menu,
+:root[data-color-theme] .info-card,
+:root[data-color-theme] .cue {
+  color: var(--text);
+}

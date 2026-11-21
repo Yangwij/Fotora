@@ -1,0 +1,70 @@
+.settings-option-hint {
+  /* 提示卡会压在照片上，不能复用只含 5%–10% 透明度的按钮填充色。 */
+  --settings-hint-bg: rgba(250, 250, 252, 0.96);
+  --settings-hint-text: #1d1d1f;
+  --settings-hint-border: rgba(0, 0, 0, 0.11);
+  position: fixed;
+  z-index: 2147483000;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 120px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--settings-hint-border);
+  border-radius: 9px;
+  background: var(--settings-hint-bg);
+  color: var(--settings-hint-text);
+  box-shadow:
+    0 8px 22px rgb(0 0 0 / 16%),
+    0 1px 3px rgb(0 0 0 / 8%);
+  backdrop-filter: saturate(170%) blur(18px);
+  -webkit-backdrop-filter: saturate(170%) blur(18px);
+  font-size: 12.5px;
+  font-weight: 450;
+  line-height: 1.45;
+  letter-spacing: 0.005em;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-break: strict;
+  text-wrap: pretty;
+  opacity: 0;
+  transform: translateY(2px) scale(0.985);
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  user-select: none;
+  transition:
+    opacity 110ms ease,
+    transform 110ms ease;
+}
+
+:root[data-color-mode="dark"] .settings-option-hint {
+  --settings-hint-bg: rgba(42, 42, 46, 0.96);
+  --settings-hint-text: #f2f2f4;
+  --settings-hint-border: rgba(255, 255, 255, 0.13);
+  box-shadow:
+    0 8px 22px rgb(0 0 0 / 34%),
+    0 1px 3px rgb(0 0 0 / 22%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-color-mode="auto"] .settings-option-hint {
+    --settings-hint-bg: rgba(42, 42, 46, 0.96);
+    --settings-hint-text: #f2f2f4;
+    --settings-hint-border: rgba(255, 255, 255, 0.13);
+    box-shadow:
+      0 8px 22px rgb(0 0 0 / 34%),
+      0 1px 3px rgb(0 0 0 / 22%);
+  }
+}
+
+.settings-option-hint.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-option-hint {
+    transition: none;
+  }
+}

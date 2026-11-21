@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Album 相簿图标</title>
+  <desc id="desc">珍珠白圆角方形上，由八片彩色照片花瓣组成的相机光圈。</desc>
+  <defs>
+    <linearGradient id="bg" x1="154" y1="74" x2="852" y2="942" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".52" stop-color="#fbfcfe"/>
+      <stop offset="1" stop-color="#edf1f6"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="0" cy="0" r="1" gradientTransform="translate(492 438) rotate(90) scale(548)">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".96"/>
+      <stop offset=".56" stop-color="#f7faff" stop-opacity=".42"/>
+      <stop offset="1" stop-color="#f2f5fa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sheen" x1="240" y1="92" x2="800" y2="908" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".9"/>
+      <stop offset=".34" stop-color="#ffffff" stop-opacity=".22"/>
+      <stop offset=".7" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="petal0" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9eb5ff"/>
+      <stop offset=".47" stop-color="#647efb"/>
+      <stop offset="1" stop-color="#3f52e8"/>
+    </linearGradient>
+    <linearGradient id="petal1" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a3f7ff"/>
+      <stop offset=".47" stop-color="#39cfee"/>
+      <stop offset="1" stop-color="#08a8dc"/>
+    </linearGradient>
+    <linearGradient id="petal2" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a8f8d6"/>
+      <stop offset=".47" stop-color="#3ed5a4"/>
+      <stop offset="1" stop-color="#09af7e"/>
+    </linearGradient>
+    <linearGradient id="petal3" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ecfbb3"/>
+      <stop offset=".47" stop-color="#b8df58"/>
+      <stop offset="1" stop-color="#77ba32"/>
+    </linearGradient>
+    <linearGradient id="petal4" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff1ad"/>
+      <stop offset=".47" stop-color="#ffd04d"/>
+      <stop offset="1" stop-color="#f3a311"/>
+    </linearGradient>
+    <linearGradient id="petal5" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd1b8"/>
+      <stop offset=".47" stop-color="#ff936b"/>
+      <stop offset="1" stop-color="#ed5f3f"/>
+    </linearGradient>
+    <linearGradient id="petal6" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd0e5"/>
+      <stop offset=".47" stop-color="#fa79b6"/>
+      <stop offset="1" stop-color="#df3f8d"/>
+    </linearGradient>
+    <linearGradient id="petal7" x1="512" y1="466" x2="512" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#e4d5ff"/>
+      <stop offset=".47" stop-color="#aa80fa"/>
+      <stop offset="1" stop-color="#7548df"/>
+    </linearGradient>
+
+    <radialGradient id="core" cx="0" cy="0" r="1" gradientTransform="translate(492 488) rotate(90) scale(76)">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".72" stop-color="#f8faff"/>
+      <stop offset="1" stop-color="#e8edf5"/>
+    </radialGradient>
+    <linearGradient id="coreRing" x1="464" y1="452" x2="560" y2="572" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".95"/>
+      <stop offset=".52" stop-color="#b9c4d4" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity=".72"/>
+    </linearGradient>
+
+    <filter id="iconShadow" x="-25%" y="-25%" width="150%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="24" result="blur"/>
+      <feOffset in="blur" dy="22" result="offset"/>
+      <feFlood flood-color="#26334b" flood-opacity=".2" result="color"/>
+      <feComposite in="color" in2="offset" operator="in" result="shadow"/>
+      <feMerge>
+        <feMergeNode in="shadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="flowerShadow" x="-40%" y="-40%" width="180%" height="190%">
+      <feGaussianBlur stdDeviation="17"/>
+    </filter>
+    <filter id="coreShadow" x="-60%" y="-60%" width="220%" height="240%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+
+    <path id="petal" d="M512 460
+      C478 408 429 351 419 281
+      C411 224 431 168 463 128
+      C480 108 498 96 512 91
+      C526 96 544 108 561 128
+      C593 168 613 224 605 281
+      C595 351 546 408 512 460Z"/>
+  </defs>
+
+  <g filter="url(#iconShadow)">
+    <rect x="34" y="34" width="956" height="956" rx="214" fill="url(#bg)"/>
+    <rect x="34" y="34" width="956" height="956" rx="214" fill="url(#ambient)"/>
+    <rect x="34" y="34" width="956" height="956" rx="214" fill="url(#sheen)"/>
+    <rect x="35.5" y="35.5" width="953" height="953" rx="212.5" fill="none" stroke="#ffffff" stroke-opacity=".92" stroke-width="3"/>
+    <rect x="37" y="37" width="950" height="950" rx="211" fill="none" stroke="#cbd3df" stroke-opacity=".55" stroke-width="1.2"/>
+  </g>
+
+  <!-- 花瓣下方的一层柔影，让彩色光圈从纸面轻轻浮起。 -->
+  <g fill="#31405f" fill-opacity=".14" filter="url(#flowerShadow)" transform="translate(0 17)">
+    <use href="#petal"/>
+    <use href="#petal" transform="rotate(45 512 512)"/>
+    <use href="#petal" transform="rotate(90 512 512)"/>
+    <use href="#petal" transform="rotate(135 512 512)"/>
+    <use href="#petal" transform="rotate(180 512 512)"/>
+    <use href="#petal" transform="rotate(225 512 512)"/>
+    <use href="#petal" transform="rotate(270 512 512)"/>
+    <use href="#petal" transform="rotate(315 512 512)"/>
+  </g>
+
+  <!-- 八片花瓣：每一片都像一张被光穿过的小照片，叠成相册光圈。 -->
+  <g stroke="#ffffff" stroke-opacity=".2" stroke-width="2.4">
+    <g transform="rotate(22.5 512 512)">
+      <use href="#petal" fill="url(#petal0)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".38" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(67.5 512 512)">
+      <use href="#petal" fill="url(#petal1)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(112.5 512 512)">
+      <use href="#petal" fill="url(#petal2)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(157.5 512 512)">
+      <use href="#petal" fill="url(#petal3)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(202.5 512 512)">
+      <use href="#petal" fill="url(#petal4)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(247.5 512 512)">
+      <use href="#petal" fill="url(#petal5)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".38" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(292.5 512 512)">
+      <use href="#petal" fill="url(#petal6)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".38" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <g transform="rotate(337.5 512 512)">
+      <use href="#petal" fill="url(#petal7)"/>
+      <path d="M505 431C482 383 451 326 444 269C438 221 450 178 474 143C488 123 502 111 510 103"
+            fill="none" stroke="#ffffff" stroke-opacity=".4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- 中心是一枚收拢的白色镜头：让整体更像相机，也帮助 16px 小尺寸保持识别度。 -->
+  <circle cx="512" cy="522" r="66" fill="#25324a" fill-opacity=".2" filter="url(#coreShadow)"/>
+  <circle cx="512" cy="512" r="60" fill="url(#core)"/>
+  <circle cx="512" cy="512" r="59" fill="none" stroke="url(#coreRing)" stroke-width="3"/>
+  <circle cx="512" cy="512" r="43" fill="none" stroke="#7f8da3" stroke-opacity=".14" stroke-width="1.5"/>
+  <path d="M484 491C494 477 508 469 525 468" fill="none" stroke="#ffffff" stroke-opacity=".98" stroke-width="7" stroke-linecap="round"/>
+</svg>

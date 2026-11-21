@@ -1,0 +1,15 @@
+/* Shared motion language for the main window and standalone media pages.
+   Components may keep their own choreography when movement carries meaning;
+   these tokens define the common feedback and transition tiers. */
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --motion-duration-press: 120ms;
+  --motion-duration-feedback: 140ms;
+  --motion-duration-control: 170ms;
+  --motion-duration-enter: 210ms;
+  --motion-duration-exit: 140ms;
+  --motion-press-scale-compact: 0.94;
+  --motion-press-scale-control: 0.97;
+}
