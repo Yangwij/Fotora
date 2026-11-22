@@ -133,6 +133,12 @@
         });
         return;
       }
+      if (type === "photos-visibility-change") {
+        post("album-map:control-state", {
+          held: payload.hidden === true,
+        });
+        return;
+      }
       if (type === "error") {
         post("album-map:error", { message: payload.message });
         showNotice("地图暂时无法显示");
@@ -592,6 +598,24 @@
     if (message.type === "album-map:set-selected") {
       clearSearchApplyTimer();
       globe.setSelected(message.id);
+      return;
+    }
+    if (message.type === "album-map:set-target-point") {
+      const lat = Number(message.lat);
+      const lon = Number(message.lon);
+      if (
+        !Number.isFinite(lat) ||
+        !Number.isFinite(lon) ||
+        lat < -90 ||
+        lat > 90 ||
+        lon < -180 ||
+        lon > 180
+      ) {
+        return;
+      }
+      clearSearchApplyTimer();
+      targetPoint = { lat, lon };
+      globe.showTargetPoint(lat, lon);
       return;
     }
     if (message.type === "album-map:set-photos-hidden") {

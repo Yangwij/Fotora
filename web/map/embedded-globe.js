@@ -268,6 +268,9 @@
       this.photoCanvasVisibleKeys = new Set();
       this.lastMarkerClickId = null;
       this.targetMarker = null;
+      this.photosHidden = false;
+      this.markerScaleDirty = false;
+      this.hiddenPhotoRestoreFrame = 0;
       this.curMarkerScale = 1;
       this.map = null;
       this.mapLoaded = false;
@@ -642,7 +645,9 @@
         this.updateGlobeBackdrop();
       });
       map.on("render", () => {
-        if (this.photoCanvasActive) this.drawPhotoCanvas();
+        if (this.photoCanvasActive && !this.photosHidden) {
+          this.drawPhotoCanvas();
+        }
       });
       map.on("moveend", () => {
         this.updateGlobeFitZoom();
@@ -650,10 +655,15 @@
         this.scheduleDiagnostics();
       });
       map.on("click", (event) => {
-        const canvasGroup = this.photoGroupAtPoint(event.point);
-        if (canvasGroup) {
-          this.activateMarkerGroup(canvasGroup);
-          return;
+        if (!event.ctrlKey && !event.metaKey && this.photosHidden) {
+          this.setPhotosHidden(false);
+        }
+        if (!this.photosHidden) {
+          const canvasGroup = this.photoGroupAtPoint(event.point);
+          if (canvasGroup) {
+            this.activateMarkerGroup(canvasGroup);
+            return;
+          }
         }
         if (!this.options.pickLocation) return;
         const [lat, lon] = this.fromMapLngLat(
@@ -665,9 +675,10 @@
       });
       map.on("mousemove", (event) => {
         if (!this.photoCanvasActive) return;
-        this.map.getCanvas().style.cursor = this.photoGroupAtPoint(event.point)
-          ? "pointer"
-          : "";
+        this.map.getCanvas().style.cursor =
+          !this.photosHidden && this.photoGroupAtPoint(event.point)
+            ? "pointer"
+            : "";
       });
       map.on("movestart", (event) => {
         if (event?.originalEvent) this.cancelFly();
@@ -708,9 +719,24 @@
 
     setPhotosHidden(hidden) {
       if (!this.map) return;
+      const next = Boolean(hidden);
+      if (this.photosHidden === next) return;
+      this.photosHidden = next;
       this.map
         .getContainer()
-        .classList.toggle("photos-hidden", Boolean(hidden));
+        .classList.toggle("photos-hidden", this.photosHidden);
+      this.post("photos-visibility-change", { hidden: this.photosHidden });
+      if (!this.photosHidden) this.scheduleHiddenPhotoRestore();
+    }
+
+    scheduleHiddenPhotoRestore() {
+      if (this.hiddenPhotoRestoreFrame || !this.markerScaleDirty) return;
+      this.hiddenPhotoRestoreFrame = requestAnimationFrame(() => {
+        this.hiddenPhotoRestoreFrame = 0;
+        if (!this.map || this.photosHidden || !this.markerScaleDirty) return;
+        this.setMarkerScale(this.markerScale(this.map.getZoom()), false);
+        if (this.photoCanvasActive) this.schedulePhotoCanvasRender();
+      });
     }
 
     bindRotateGesture(map) {
@@ -916,6 +942,10 @@
             return;
           event.preventDefault();
           event.stopImmediatePropagation();
+          if (!event.ctrlKey && !event.metaKey && this.photosHidden) {
+            this.setPhotosHidden(false);
+          }
+          if (this.photosHidden) return;
           this.zoomAnchorContext = null;
           this.setAdaptiveZoom(
             this.map.getZoom() + 1,
@@ -941,9 +971,17 @@
       this.map.getContainer().addEventListener(
         "wheel",
         (event) => {
-          if (!event.deltaY || event.altKey) return;
+          if (event.altKey) return;
           event.preventDefault();
-          event.stopPropagation();
+          /* 捕获阶段直接接管，避免 Ctrl+滚轮继续走浏览器缩放或落入其他
+             地图手势处理。照片是否显示不应改变滚轮缩放的输入路径。 */
+          event.stopImmediatePropagation();
+          if (!event.ctrlKey && !event.metaKey && this.photosHidden) {
+            this.setPhotosHidden(false);
+          }
+          /* Ctrl 隐藏照片时地图保持固定，只允许点击放置目标大头针。 */
+          if (this.photosHidden) return;
+          if (!event.deltaY) return;
           this.cancelDragInertia();
           const unit =
             event.deltaMode === 1
@@ -972,7 +1010,7 @@
           this.zoomAnchorAt = now;
           this.setAdaptiveZoom(baseTarget + step, this.zoomAnchorContext);
         },
-        { passive: false },
+        { passive: false, capture: true },
       );
     }
 
@@ -1017,7 +1055,7 @@
           });
         }
         this.updateGlobeShift();
-        this.updateDiagnostics();
+        this.scheduleDiagnostics();
         return;
       }
       if (!this.zoomMotion) {
@@ -1077,7 +1115,7 @@
         });
       }
       this.updateGlobeShift();
-      this.updateDiagnostics();
+      this.scheduleDiagnostics();
       if (settled) {
         motion.raf = 0;
         this.zoomMotion = null;
@@ -1536,6 +1574,12 @@
 
     setMarkerScale(scale, animate) {
       this.curMarkerScale = scale;
+      /* 隐藏照片时不可见，缩放期间跳过逐标记的 transform 写入。 */
+      if (this.photosHidden) {
+        this.markerScaleDirty = true;
+        return;
+      }
+      this.markerScaleDirty = false;
       for (const image of this.markerImgs) {
         const element = image.closest(".pm-photo-icon");
         element?.style.setProperty("--marker-scale", String(scale));
@@ -1810,7 +1854,8 @@
     }
 
     schedulePhotoCanvasRender() {
-      if (!this.photoCanvasActive || this.photoCanvasFrame) return;
+      if (!this.photoCanvasActive || this.photoCanvasFrame || this.photosHidden)
+        return;
       this.photoCanvasFrame = requestAnimationFrame(() => {
         this.photoCanvasFrame = 0;
         this.drawPhotoCanvas();
@@ -1963,6 +2008,7 @@
     drawPhotoCanvas() {
       if (
         !this.photoCanvasActive ||
+        this.photosHidden ||
         !this.map ||
         !this.photoCanvas ||
         !this.photoCanvasContext
@@ -2253,7 +2299,9 @@
         this.clearMarkers();
         this.photoCanvasActive = true;
         this.photoCanvasGroups = groups;
-        if (this.photoCanvas) this.photoCanvas.hidden = false;
+        if (this.photoCanvas) {
+          this.photoCanvas.hidden = false;
+        }
         this.schedulePhotoCanvasRender();
         document.body.dataset.markerRenderer = "canvas";
         document.body.dataset.markerCount = String(groups.length);

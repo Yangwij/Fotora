@@ -934,6 +934,11 @@ body.is-location-assign .globe-attribution {
   pointer-events: none;
 }
 
+.photos-hidden .map-photo-canvas {
+  opacity: 0;
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .globe-type-toggle,
   .globe-compass-button,

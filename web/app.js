@@ -2136,10 +2136,37 @@ const rememberActiveView = () =>
    而不是掉回默认图库。每次 render 刷新，开销极小。 */
 const LAST_VIEW_KEY = "fotora-last-view";
 function snapshotCurrentView() {
+  const targetLat = Number(locationAssignTarget?.lat);
+  const targetLon = Number(locationAssignTarget?.lon);
+  const hasTarget =
+    Number.isFinite(targetLat) &&
+    Number.isFinite(targetLon) &&
+    targetLat >= -90 &&
+    targetLat <= 90 &&
+    targetLon >= -180 &&
+    targetLon <= 180;
   const value = JSON.stringify({
     activeId: state.activeId,
     locationSubview: state.locationSubview,
     albumMapOpen: state.albumMapOpen,
+    albumMapAssignMode: state.albumMapOpen && state.albumMapAssignMode,
+    albumMapItemIds: state.albumMapOpen
+      ? state.albumMapItems
+          .map((item) => Number(item?.id))
+          .filter((id) => Number.isInteger(id) && id > 0)
+      : [],
+    albumMapSelectedId:
+      state.albumMapOpen && state.albumMapAssignMode
+        ? Number(albumMapSelectedId) || null
+        : null,
+    albumMapReturnScroll: state.albumMapOpen
+      ? Math.max(0, Number(state.albumMapReturnScroll) || 0)
+      : 0,
+    locationAssignTarget: hasTarget ? { lat: targetLat, lon: targetLon } : null,
+    locationAssignSavedIds:
+      state.albumMapOpen && state.albumMapAssignMode
+        ? [...locationAssignSavedIds]
+        : [],
   });
   /* sessionStorage 足够快，但渲染进程硬崩溃时可能来不及落盘，甚至会一起
      丢失。再写一份 localStorage，确保崩溃后的自动重载仍能回到原视图。 */
@@ -6593,14 +6620,24 @@ function libraryTimelineShowsTime() {
   return showLibraryTimeline && libraryTimelineUsesTime();
 }
 
+function photoWallSurfaceActive() {
+  return Boolean(
+    state.photoWall ||
+    state.photoWallAlbumId ||
+    state.masonryWallAlbumId ||
+    state.filmrollWallAlbumId ||
+    state.mosaicWallAlbumId,
+  );
+}
+
 function libraryTimelineIsVisible() {
   const content = $("#content");
   return (
     showTimelineScrubber &&
     state.activeId === "library" &&
+    !photoWallSurfaceActive() &&
     state.items.length > 0 &&
     !state.copyTarget &&
-    !state.photoWall &&
     !state.filmstrip &&
     Boolean(content && content.scrollHeight > content.clientHeight + 1)
   );
@@ -7530,7 +7567,10 @@ function scheduleMapFilmstripHide(kind) {
 function setMapFilmstripRevealed(kind, revealed) {
   const { nav } = mapFilmstripElements(kind);
   if (!nav || nav.hidden) return;
-  if (!revealed && nav.classList.contains("map-filmstrip-disabled")) return;
+  if (!revealed && nav.classList.contains("map-filmstrip-disabled")) {
+    syncLocationAssignApplyButton();
+    return;
+  }
   const wasHidden = nav.getAttribute("aria-hidden") === "true";
   nav.classList.remove("is-near");
   if (revealed) {
@@ -7542,8 +7582,11 @@ function setMapFilmstripRevealed(kind, revealed) {
       if (!mapFilmstripDisplayEnabled()) {
         nav.classList.add("map-filmstrip-disabled");
       }
+      syncLocationAssignApplyButton();
     });
+    syncLocationAssignApplyButton();
   }
+  if (revealed) syncLocationAssignApplyButton();
 }
 
 /* 「显示照片栏」是照片栏总开关；「显示地图照片栏」可单独强制地图栏。
@@ -7797,12 +7840,14 @@ function renderMapFilmstrip(kind, { resetScroll = false, reveal = true } = {}) {
   if (!photos.length || !reveal || deferred) {
     nav.hidden = true;
     delete nav.dataset.filmstripEntered;
+    syncLocationAssignApplyButton();
     return;
   }
   renderMapFilmstripWindow(kind, {
     centerId: mapFilmstripSelectedId(kind),
     resetScroll,
   });
+  syncLocationAssignApplyButton();
 }
 
 function revealMapFilmstripAfterFlight(kind) {
@@ -7870,6 +7915,7 @@ function hideMapFilmstrip(kind) {
   delete nav.dataset.filmstripEntered;
   nav.classList.remove("is-near");
   nav.removeAttribute("aria-hidden");
+  syncLocationAssignApplyButton();
 }
 
 function focusMapFilmstripItem(kind, id) {
@@ -9272,6 +9318,35 @@ function syncAlbumMapSelection(id = null) {
   });
 }
 
+function validAlbumMapTarget(target) {
+  const lat = Number(target?.lat);
+  const lon = Number(target?.lon);
+  if (
+    !Number.isFinite(lat) ||
+    !Number.isFinite(lon) ||
+    lat < -90 ||
+    lat > 90 ||
+    lon < -180 ||
+    lon > 180
+  ) {
+    return null;
+  }
+  return { lat, lon };
+}
+
+function syncAlbumMapTarget() {
+  if (!state.albumMapOpen || !state.albumMapAssignMode) return false;
+  const target = validAlbumMapTarget(locationAssignTarget);
+  if (!target) {
+    return postToAlbumMap({ type: "album-map:clear-target" });
+  }
+  return postToAlbumMap({
+    type: "album-map:set-target-point",
+    lat: target.lat,
+    lon: target.lon,
+  });
+}
+
 function locationAssignSelectedItem() {
   return (
     state.albumMapItems.find(
@@ -9287,14 +9362,13 @@ function selectLocationAssignPhoto(id) {
   );
   if (!next) return;
   albumMapSelectedId = Number(next.id);
-  locationAssignTarget = null;
-  postToAlbumMap({ type: "album-map:clear-target" });
   syncMapFilmstripSelection("album");
   syncLocationAssignApplyButton();
   postToAlbumMap({
     type: "album-map:set-selected",
     id: albumMapSelectedId,
   });
+  snapshotCurrentView();
 }
 
 function patchItemLocation(id, lat, lon) {
@@ -9346,14 +9420,13 @@ async function applyLocationAssign() {
       : [id]) {
       locationAssignSavedIds.add(Number(changedId));
     }
-    locationAssignTarget = null;
-    postToAlbumMap({ type: "album-map:clear-target" });
     const ordered = sortAlbumItems(state.albumMapItems, "oldest");
     const index = ordered.findIndex((entry) => Number(entry.id) === id);
     const next = ordered[Math.min(index + 1, ordered.length - 1)] || item;
     albumMapSelectedId = Number(next.id);
     syncAlbumMapItems({ fit: false });
     syncAlbumMapSelection(albumMapSelectedId);
+    snapshotCurrentView();
     try {
       lastRev = (await api("/api/revision")).rev;
     } catch {}
@@ -9370,7 +9443,16 @@ async function applyLocationAssign() {
 function syncLocationAssignApplyButton() {
   const button = $("#locationAssignApply");
   if (!button) return;
-  button.hidden = !state.albumMapOpen || !state.albumMapAssignMode;
+  const filmstrip = mapFilmstripElements("album").nav;
+  const filmstripVisible = Boolean(
+    filmstrip &&
+    !filmstrip.hidden &&
+    filmstrip.getAttribute("aria-hidden") !== "true" &&
+    !filmstrip.classList.contains("map-filmstrip-disabled") &&
+    !filmstrip.classList.contains("is-filmstrip-exiting"),
+  );
+  button.hidden =
+    !state.albumMapOpen || !state.albumMapAssignMode || !filmstripVisible;
   button.disabled = locationAssignSaving;
   button.classList.toggle("is-saving", locationAssignSaving);
   button.setAttribute("aria-busy", String(locationAssignSaving));
@@ -9634,7 +9716,10 @@ function hideAlbumMapView() {
   });
 }
 
-function openAlbumMap(items, { assignMode = false } = {}) {
+function openAlbumMap(
+  items,
+  { assignMode = false, recovered = null, quiet = false } = {},
+) {
   const media = sortAlbumItems(
     dedupeLocationItems(items).filter(
       (item) => item.kind === "photo" || item.kind === "video",
@@ -9645,26 +9730,42 @@ function openAlbumMap(items, { assignMode = false } = {}) {
     ? media
     : media.filter((item) => locationCoordinate(item));
   if (!visibleMedia.length) {
-    toast(
-      state.activeId === "library"
-        ? "这个图库里没有带位置信息的项目"
-        : "这个相簿里没有带位置信息的项目",
-    );
+    if (!quiet) {
+      toast(
+        state.activeId === "library"
+          ? "这个图库里没有带位置信息的项目"
+          : "这个相簿里没有带位置信息的项目",
+      );
+    }
     return false;
   }
   /* 相簿地图本身就是一个 WebGL 上下文；位置预览预热帧在主地图打开后
      立即卸载，避免冷启动时两个地图同时争用 GPU。 */
   setContextMapPrewarmSuspended(true);
-  state.albumMapReturnScroll = $("#content").scrollTop;
+  const recoveredScroll = Number(recovered?.albumMapReturnScroll);
+  state.albumMapReturnScroll = Number.isFinite(recoveredScroll)
+    ? Math.max(0, recoveredScroll)
+    : $("#content").scrollTop;
   state.albumMapAssignMode = assignMode;
   state.albumMapItems = visibleMedia;
   albumMapEntryFade = beginMapEntryFade();
   state.albumMapOpen = true;
   state.albumMapFitToken += 1;
   albumMapCloseGuardUntil = performance.now() + 700;
-  albumMapSelectedId = assignMode ? Number(visibleMedia[0].id) : null;
-  locationAssignTarget = null;
+  const recoveredSelectedId = Number(recovered?.albumMapSelectedId);
+  const canRestoreSelection =
+    Number.isInteger(recoveredSelectedId) &&
+    visibleMedia.some((item) => Number(item.id) === recoveredSelectedId);
+  albumMapSelectedId = assignMode
+    ? canRestoreSelection
+      ? recoveredSelectedId
+      : Number(visibleMedia[0].id)
+    : null;
+  locationAssignTarget = assignMode
+    ? validAlbumMapTarget(recovered?.locationAssignTarget)
+    : null;
   locationAssignSaving = false;
+  albumMapControlHeld = false;
   state.filmstrip = false;
   state.select = false;
   state.edit = false;
@@ -9673,6 +9774,56 @@ function openAlbumMap(items, { assignMode = false } = {}) {
   state.cursor = -1;
   render();
   return true;
+}
+
+function recoveredAlbumMapItems(ids) {
+  const wanted = new Set(
+    (Array.isArray(ids) ? ids : [])
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0),
+  );
+  if (!wanted.size) return [];
+  const byId = new Map();
+  for (const collection of [
+    state.albumItemsRaw,
+    state.items,
+    state.locationItemsRaw,
+  ]) {
+    for (const item of Array.isArray(collection) ? collection : []) {
+      const id = Number(item?.id);
+      if (wanted.has(id) && !byId.has(id)) byId.set(id, item);
+    }
+  }
+  return [...wanted].map((id) => byId.get(id)).filter(Boolean);
+}
+
+function restoreAlbumMapFromSnapshot(snapshot) {
+  if (!snapshot?.albumMapOpen) return false;
+  if (snapshot.albumMapAssignMode) {
+    const media = recoveredAlbumMapItems(snapshot.albumMapItemIds);
+    if (!media.length) {
+      state.albumMapOpen = false;
+      state.albumMapAssignMode = false;
+      state.albumMapItems = [];
+      return false;
+    }
+    locationAssignSavedIds.clear();
+    for (const id of Array.isArray(snapshot.locationAssignSavedIds)
+      ? snapshot.locationAssignSavedIds
+      : []) {
+      const numeric = Number(id);
+      if (Number.isInteger(numeric) && numeric > 0) {
+        locationAssignSavedIds.add(numeric);
+      }
+    }
+    return openAlbumMap(media, {
+      assignMode: true,
+      recovered: snapshot,
+      quiet: true,
+    });
+  }
+  const items = state.albumItemsRaw.length ? state.albumItemsRaw : state.items;
+  return openAlbumMap(items, { recovered: snapshot, quiet: true });
 }
 
 function openCurrentCollectionMap() {
@@ -9818,6 +9969,7 @@ function handleAlbumMapMessage(event) {
     syncAlbumMapSatellite();
     syncAlbumMapFlightSpeed();
     syncAlbumMapSelection(albumMapSelectedId);
+    syncAlbumMapTarget();
     postToAlbumMap({
       type: "album-map:set-photos-hidden",
       hidden: albumMapControlHeld,
@@ -9885,6 +10037,7 @@ function handleAlbumMapMessage(event) {
     )
       return;
     locationAssignTarget = { lat, lon };
+    snapshotCurrentView();
     syncMapFilmstripSelection("album");
     syncLocationAssignApplyButton();
     return;
@@ -9926,6 +10079,27 @@ window.addEventListener("blur", () => {
     type: "album-map:set-photos-hidden",
     hidden: false,
   });
+});
+window.addEventListener("keydown", (event) => {
+  if (
+    event.key !== "Control" ||
+    event.repeat ||
+    !state.albumMapOpen ||
+    !state.albumMapAssignMode
+  )
+    return;
+  albumMapControlHeld = true;
+  postToAlbumMap({ type: "album-map:set-photos-hidden", hidden: true });
+});
+window.addEventListener("keyup", (event) => {
+  if (
+    event.key !== "Control" ||
+    !state.albumMapOpen ||
+    !state.albumMapAssignMode
+  )
+    return;
+  albumMapControlHeld = false;
+  postToAlbumMap({ type: "album-map:set-photos-hidden", hidden: false });
 });
 $("#locationAssignApply").addEventListener("click", () => {
   void applyLocationAssign();
@@ -16768,6 +16942,9 @@ function render({
     Boolean(state.photoWallPlayback);
   const albumMapVisible = isAlbumMap;
   const locationsMapVisible = isLocations && state.locationSubview === "map";
+  setContextMapPrewarmSuspended(
+    albumMapVisible || locationsMapVisible || state.select,
+  );
   const filmstripVisible =
     state.filmstrip &&
     !state.copyTarget &&
@@ -23710,6 +23887,9 @@ function syncSelectionEntryChrome() {
 
 function enterSelection({ selectAll = false } = {}) {
   if (!hasGridItems()) return;
+  /* 位置分配会启用另一个 WebGL 地图；多选期间提前释放信息卡地图的
+     预热上下文，给主地图留出 GPU 资源。 */
+  setContextMapPrewarmSuspended(true);
   const viewport = captureSelectionViewport();
   const reusePhotoSurface = Boolean(
     $("#content .photo-grid") &&
@@ -23839,6 +24019,7 @@ async function exitSelection({ reuseGrid = false } = {}) {
   if (restoringNumberingOrder) animatePhotoReflow(exitFrames);
   else animateSelectionExit(exitFrames);
   await flushPendingUpdate();
+  resumeContextMapPrewarmIfPossible();
 }
 
 $("#selectBtn").addEventListener("click", () => {
@@ -40166,19 +40347,30 @@ async function restoreActiveView() {
     const snap = readLastViewSnapshot();
     if (snap && snap.activeId && state.roots.length) {
       state.locationSubview = snap.locationSubview || state.locationSubview;
-      state.albumMapOpen = Boolean(snap.albumMapOpen);
+      state.albumMapOpen = false;
+      state.albumMapAssignMode = false;
+      state.albumMapItems = [];
       state.activeId = snap.activeId;
+      let restoredCollection = false;
       try {
-        if (snap.activeId === "library") await loadLibrary();
-        else if (snap.activeId === "photoWall") await loadPhotoWallAlbums();
-        else if (snap.activeId === "favorites") await loadFavorites();
-        else if (snap.activeId === "trash") await loadTrash();
-        else if (snap.activeId !== "all" && albumById(snap.activeId))
+        if (snap.activeId === "library") {
+          await loadLibrary();
+          restoredCollection = true;
+        } else if (snap.activeId === "photoWall") {
+          await loadPhotoWallAlbums();
+        } else if (snap.activeId === "favorites") {
+          await loadFavorites();
+        } else if (snap.activeId === "trash") {
+          await loadTrash();
+        } else if (snap.activeId !== "all" && albumById(snap.activeId)) {
           await loadAlbum(snap.activeId);
-        else if (snap.activeId !== "all" && snap.activeId !== "locations") {
+          restoredCollection = true;
+        } else if (snap.activeId !== "all" && snap.activeId !== "locations") {
           state.activeId = "library";
           await loadLibrary();
+          restoredCollection = true;
         }
+        if (restoredCollection) restoreAlbumMapFromSnapshot(snap);
       } catch {
         state.activeId = "library";
         try {

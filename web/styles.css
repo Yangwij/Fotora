@@ -3479,6 +3479,13 @@ body.album-sorting .nav-item {
   display: none;
 }
 
+/* 四种照片墙使用自己的全屏空间；模式切换前后都不显示图库时间轴滑块。 */
+body.photo-wall-mode .library-timeline-scrubber,
+body.photo-wall-library-active .library-timeline-scrubber,
+body.photo-wall-exiting .library-timeline-scrubber {
+  display: none;
+}
+
 .library-timeline-track {
   position: absolute;
   top: 0;

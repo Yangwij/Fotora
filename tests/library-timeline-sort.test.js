@@ -5,6 +5,7 @@ const test = require("node:test");
 
 const root = path.join(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
+const css = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
 
 test("拖动滑块总开关与时间刻度显示逻辑相互独立", () => {
   const timeAware = app.slice(
@@ -26,10 +27,26 @@ test("拖动滑块总开关与时间刻度显示逻辑相互独立", () => {
   );
   assert.match(
     visible,
-    /return \(\s*showTimelineScrubber &&\s*state\.activeId === "library"/,
+    /return \(\s*showTimelineScrubber &&\s*state\.activeId === "library" &&\s*!photoWallSurfaceActive\(\)/,
   );
   assert.match(ticks, /const showsTime = libraryTimelineShowsTime\(\);/);
   assert.match(ticks, /if \(!showsTime\) return;/);
+});
+
+test("四种照片墙模式不显示图库时间轴滑块", () => {
+  const surface = app.slice(
+    app.indexOf("function photoWallSurfaceActive()"),
+    app.indexOf("function libraryTimelineIsVisible()"),
+  );
+  assert.match(surface, /state\.photoWall \|\|/);
+  assert.match(surface, /state\.photoWallAlbumId \|\|/);
+  assert.match(surface, /state\.masonryWallAlbumId \|\|/);
+  assert.match(surface, /state\.filmrollWallAlbumId \|\|/);
+  assert.match(surface, /state\.mosaicWallAlbumId/);
+  assert.match(
+    css,
+    /body\.photo-wall-mode \.library-timeline-scrubber,[\s\S]*body\.photo-wall-library-active \.library-timeline-scrubber,[\s\S]*body\.photo-wall-exiting \.library-timeline-scrubber\s*\{[\s\S]*display:\s*none;/,
+  );
 });
 
 test("所有照片保持连续网格，不创建时间分组标题", () => {
@@ -58,25 +75,21 @@ test("仅重复点击当前时间分段按钮时在底部与顶部之间切换",
     setMode,
     /if \(mode === state\.libraryTimelineMode\) \{\s*return toggleLibraryTimelineScrollEdge\(\);/,
   );
-  assert.match(
-    toggleScroll,
-    /top: goToBottom \? content\.scrollHeight : 0,/,
-  );
+  assert.match(toggleScroll, /top: goToBottom \? content\.scrollHeight : 0,/);
   assert.match(
     toggleScroll,
     /libraryTimelineRepeatScrollEdge = goToBottom \? "top" : "bottom";/,
   );
-  const toolbarBindingStart = app.indexOf('bindWindowDragSurface($(".toolbar")');
+  const toolbarBindingStart = app.indexOf(
+    'bindWindowDragSurface($(".toolbar")',
+  );
   assert.ok(toolbarBindingStart >= 0);
   const toolbarBindingEnd = app.indexOf(
     '$("#viewer").addEventListener',
     toolbarBindingStart,
   );
   assert.ok(toolbarBindingEnd > toolbarBindingStart);
-  const toolbarBinding = app.slice(
-    toolbarBindingStart,
-    toolbarBindingEnd,
-  );
+  const toolbarBinding = app.slice(toolbarBindingStart, toolbarBindingEnd);
   assert.doesNotMatch(app, /scrollProjectAreaTo/);
   assert.doesNotMatch(toolbarBinding, /onClick:/);
 });
