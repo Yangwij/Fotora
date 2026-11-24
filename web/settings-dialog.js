@@ -41,6 +41,19 @@
     }),
   );
 
+  /* 设置行里只留一句短说明。删掉什么、留下什么、之后会怎样，全部写在点下去
+     之后那张确认面板里 —— 面板复用 app.js 的 askConfirm，和「从 Fotora 中
+     移除」是同一张卡片、同一套动作区，只是文案更详细。 */
+  const CLEAR_DATA_ROW_DESCRIPTION = "删除本机该应用的数据，不影响原始照片";
+  const CLEAR_DATA_CONFIRM_TITLE = "清除 Fotora 的所有数据？";
+  const CLEAR_DATA_CONFIRM_MESSAGE =
+    "将删除图库索引、相簿、收藏、评分、编辑与裁剪、拍摄时间与位置修改、界面设置和缩略图缓存。\n" +
+    "不会删除图库源文件夹里的原始照片和视频，也不会删除已经导出的文件。\n" +
+    "确认后 Fotora 会退出并完成清除。此操作不可撤销。";
+  const CLEAR_DATA_CONFIRM_ACTION = "确认";
+  const CLEAR_DATA_BLOCKED_TITLE = "暂时无法清除数据";
+  const CLEAR_DATA_BLOCKED_ACTION = "知道了";
+
   const categories = Object.freeze([
     {
       id: "general",
@@ -144,8 +157,7 @@
             {
               type: "clear-data",
               label: "清除所有数据",
-              description:
-                "将永久删除 Fotora 的应用数据文件夹（默认位于 %LOCALAPPDATA%\\Fotora），包括图库索引、相册、收藏、评分、编辑与裁剪、界面设置和缩略图等缓存。不会删除图库源文件夹中的原始照片和视频，也不会删除已经导出的文件。确认后会退出 Fotora，删除完成后自动重新启动。",
+              description: CLEAR_DATA_ROW_DESCRIPTION,
             },
           ],
         },
@@ -1005,18 +1017,70 @@
     }
   });
 
-  async function requestClearAllData(button) {
-    if (button.disabled) return;
-    button.disabled = true;
-    button.setAttribute("aria-busy", "true");
+  /* 确认面板的次要信息里带上真实的数据目录，用户才知道被删的是哪个文件夹。 */
+  async function clearDataFolderNote() {
     try {
-      await window.albumWindow?.clearAllData?.();
+      const folder = await window.albumWindow?.getDataDir?.();
+      return folder ? `文件夹：${folder}` : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /* 面板打开后把焦点挪进去：设置行那颗按钮还留在焦点上，回车会把它再点一次，
+     等于把确认面板重开一遍。默认落在安全的那个动作上。 */
+  function focusAskAction(id) {
+    document.getElementById(id)?.focus({ preventScroll: true });
+  }
+
+  /* 面板开着的时候整屏都被它接管，设置行那颗按钮既点不到，也不该显出忙碌态；
+     真开始删了才让它进入 disabled，免得用户还在读文案就看见按钮变灰。 */
+  let clearDataBusy = false;
+
+  async function requestClearAllData(button) {
+    if (clearDataBusy) return;
+    if (!window.albumWindow?.clearAllData) return;
+    clearDataBusy = true;
+    try {
+      const note = await clearDataFolderNote();
+      const confirmed = askConfirm(button, {
+        title: CLEAR_DATA_CONFIRM_TITLE,
+        message: CLEAR_DATA_CONFIRM_MESSAGE,
+        note,
+        actionText: CLEAR_DATA_CONFIRM_ACTION,
+        centered: true,
+        wide: true,
+      });
+      focusAskAction("askCancel");
+      if (!(await confirmed)) return;
+
+      button.disabled = true;
+      button.setAttribute("aria-busy", "true");
+      const result = await window.albumWindow.clearAllData();
+      if (result?.ok === false && result.error) {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        const dismissed = askConfirm(button, {
+          title: CLEAR_DATA_BLOCKED_TITLE,
+          message: String(result.error),
+          actionText: CLEAR_DATA_BLOCKED_ACTION,
+          centered: true,
+          alert: true,
+          wide: true,
+        });
+        focusAskAction("askOk");
+        await dismissed;
+      }
     } catch (err) {
       console.error("清除所有数据失败：", err);
     } finally {
+      clearDataBusy = false;
       if (button.isConnected) {
         button.disabled = false;
         button.removeAttribute("aria-busy");
+        /* 面板收掉后把焦点送回设置行：焦点原先被挪进面板，不接回来的话
+           下一次 Tab 会从文档开头重新走一遍，设置里的位置就丢了。 */
+        button.focus({ preventScroll: true });
       }
     }
   }

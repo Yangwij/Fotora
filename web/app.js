@@ -2540,6 +2540,8 @@ function fallbackToAllAlbums() {
   state.albumMapItems = [];
   resetTransientAlbumFilters();
   state.zoomAnchorId = null;
+  /* 档位只属于刚刚离开的那次浏览。 */
+  resetGalleryZoomForViewChange();
   rememberActiveView();
 }
 
@@ -2604,6 +2606,13 @@ const PHOTO_GRID_INSTANT_CLASS = "photo-grid-layout-instant";
 const VIRTUAL_PHOTO_GRID_MIN_ITEMS = 160;
 const VIRTUAL_PHOTO_GRID_OVERSCAN_MIN_PX = 120;
 const VIRTUAL_PHOTO_GRID_OVERSCAN_MAX_PX = 460;
+/* 滚动方向的背后多留一段：往回翻一点点时格子还没被回收，画面原样还在。
+   多留就是多养几张解码好的位图，所以按当前档位的单格成本折算成行数，
+   再套一个像素总上限 —— 小图档几乎不要钱，大图档自动收回来。 */
+const VIRTUAL_PHOTO_GRID_TRAIL_BUDGET_BYTES = 24 * 1024 * 1024;
+const VIRTUAL_PHOTO_GRID_TRAIL_MAX_PX = 1200;
+let galleryScrollTrailDirection = 1;
+let galleryScrollTrailLastTop = 0;
 let photoGridLayoutFrame = 0;
 let photoGridLastWidth = -1;
 let photoGridLayoutSuspended = false;
@@ -2761,6 +2770,30 @@ function photoLayoutGap(grid) {
   return Number.isFinite(value) ? Math.max(0, value) : PHOTO_LAYOUT_GAP;
 }
 
+/* 无缝档（缩到正方形的那三档）读的是 --gallery-seam-bleed：格子为了盖住
+   亚像素接缝要互相压住的宽度。其余两档为 0，等于不生效。跟 photoLayoutGap
+   一样从计算样式里取，CSS 改了这里自动跟上。 */
+function photoLayoutSeamBleed(grid) {
+  const value = parseFloat(
+    getComputedStyle(grid).getPropertyValue("--gallery-seam-bleed"),
+  );
+  return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+/* JS 布局（虚拟窗口的大图库，以及原始比例 / 瀑布流）把格子按算好的盒子
+   绝对定位，间隔归零后相邻两格正好共用一条落在像素中间的边，两边抗锯齿
+   会把背景混进去，拼成一条发丝细缝。这里让每个盒子朝右、朝下各多长 bleed
+   像素（左上角不动），后画的格子把这条边整个盖住——和 CSS 网格那套负
+   margin 的做法一致。bleed 为 0 时原样返回，不做任何改动。 */
+function growPhotoBoxesForSeam(boxes, bleed) {
+  if (!(bleed > 0) || !Array.isArray(boxes)) return boxes;
+  for (const box of boxes) {
+    box.width += bleed;
+    box.height += bleed;
+  }
+  return boxes;
+}
+
 function photoAspect(item, tile) {
   const width = Number(item?.width);
   const height = Number(item?.height);
@@ -2914,6 +2947,36 @@ function virtualPhotoGridRowPitch(grid, layout) {
   return box ? box.height + photoLayoutGap(grid) : 0;
 }
 
+/* 记下这一刻是往下翻还是往上翻。两像素以内的抖动不改方向，
+   免得在原地小幅滚两下就把缓冲区来回搬。 */
+function noteGalleryScrollDirection() {
+  const top = $("#content")?.scrollTop || 0;
+  const delta = top - galleryScrollTrailLastTop;
+  galleryScrollTrailLastTop = top;
+  if (Math.abs(delta) < 2) return;
+  galleryScrollTrailDirection = delta > 0 ? 1 : -1;
+}
+
+/* 身后还能多留多少像素。按「一格解码后要占多少内存」折算：缩略图是
+   fit=inside，边长² × 4 是它的上界，宁可少留几行也不要超预算。 */
+function galleryTrailOverscanPx(grid, layout, rowPitch) {
+  if (!rowPitch) return 0;
+  const thumbSize = galleryThumbSizeForZoom();
+  const box = layout.boxes.find((entry) => entry.height > 0);
+  if (!box) return 0;
+  const gap = photoLayoutGap(grid);
+  const perRow = Math.max(
+    1,
+    Math.floor((grid.clientWidth + gap) / (box.width + gap)),
+  );
+  const rows = Math.floor(
+    VIRTUAL_PHOTO_GRID_TRAIL_BUDGET_BYTES /
+      (thumbSize * thumbSize * 4 * perRow),
+  );
+  if (rows <= 0) return 0;
+  return Math.min(VIRTUAL_PHOTO_GRID_TRAIL_MAX_PX, rows * rowPitch);
+}
+
 function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
   const content = $("#content");
   if (!grid?.isConnected || !content || !layout?.boxes.length) return;
@@ -2931,11 +2994,18 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
       Math.min(content.clientHeight * 0.5, rowPitch * 3),
     ),
   );
-  const rangeTop = content.scrollTop - overscan;
+  /* 往回翻是最容易撞上「明明看过了却还要再加载一次」的场景，所以滚动方向的
+     身后按预算多留一段；身前那段交给缩略图预热和提前解码去铺。 */
+  const trail = Math.max(
+    overscan,
+    galleryTrailOverscanPx(grid, layout, rowPitch),
+  );
+  const scrollingDown = galleryScrollTrailDirection > 0;
+  const rangeTop = content.scrollTop - (scrollingDown ? trail : overscan);
   const rangeBottom =
     content.scrollTop +
     content.clientHeight +
-    overscan +
+    (scrollingDown ? overscan : trail) +
     rowPitch * extraRowsBelow;
   const visibleBoxes = layout.boxes.filter(
     (box) =>
@@ -2961,6 +3031,8 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
     }
     galleryImageWindowObserver?.unobserve(tile);
     galleryImageWindowObserved.delete(tile);
+    /* 摘走已经解码好的那张图，留着给之后同一位置的格子直接接回去。 */
+    donateThumbDecodeImage(tile);
     tile.remove();
   }
   const missing = visibleBoxes.filter((box) => !tiles.has(box.index));
@@ -2989,11 +3061,17 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
     if (tile.style.width !== width) tile.style.width = width;
     if (tile.style.height !== height) tile.style.height = height;
   }
-  if (galleryImageWindowObserver) {
-    for (const box of missing) {
-      const tile = tiles.get(box.index);
-      if (tile) observeGalleryImageTile(tile);
-    }
+  for (const box of missing) {
+    const tile = tiles.get(box.index);
+    if (!tile) continue;
+    /* 新建的格子先去离屏解码池领一张同一 URL 的现成图：领到的节点已经解码
+       完成，插好就地可见，连 onload 都不用等，这一帧画面就已经在了。
+       这一步必须等格子进了真文档再做 —— <template> 的内容文档不是「完全
+       活动」的，把一张已经加载好的 <img> 挪进去，浏览器会把这次加载作废。 */
+    const img = adoptThumbDecodeImage(tile);
+    /* 领来的节点不会再触发 onload，得自己补一次就绪同步。 */
+    if (img?.complete && img.naturalWidth > 0) syncTileAspect(img);
+    if (galleryImageWindowObserver) observeGalleryImageTile(tile);
   }
 }
 
@@ -3190,6 +3268,7 @@ function applyPhotoGridLayouts({
         : effectiveMode === "justified"
           ? justifiedPhotoBoxes(entries, width, targetSize, layoutGap)
           : masonryPhotoBoxes(entries, width, targetSize, layoutGap);
+    growPhotoBoxesForSeam(result.boxes, photoLayoutSeamBleed(grid));
     if (windowed) {
       const layout = {
         boxes: result.boxes,
@@ -5010,6 +5089,16 @@ function syncTileAspect(img) {
   const ar = img.naturalWidth / img.naturalHeight;
   tile.style.setProperty("--ar", ar.toFixed(4));
   tile.style.setProperty("--cs", Math.max(ar, 1 / ar).toFixed(4));
+  const source = thumbImageKey(img);
+  /* 这张已经完整上过屏：磁盘、HTTP 缓存、解码全是热的，真正花掉的只有几毫秒。
+     剩下的「两帧 + 210ms 淡入」纯粹是动画，可它对用户就是「又加载了一次」。
+     is-thumb-warm 和 is-media-ready 必须同一帧加上 —— CSS 里过渡时长是 none，
+     浏览器根本不会起过渡，滑回看过的区域时画面就是原样在那儿。 */
+  if (thumbWasPainted(source)) {
+    tile.classList.add("is-thumb-warm", "is-media-ready");
+    return;
+  }
+  tile.classList.remove("is-thumb-warm");
   const revealAfterPaint = () => {
     const stillCurrent = () => img.isConnected && img.closest(".tile") === tile;
     if (!stillCurrent()) return;
@@ -5018,7 +5107,10 @@ function syncTileAspect(img) {
     requestAnimationFrame(() => {
       if (!stillCurrent()) return;
       requestAnimationFrame(() => {
-        if (stillCurrent()) tile.classList.add("is-media-ready");
+        if (!stillCurrent()) return;
+        tile.classList.add("is-media-ready");
+        /* 从这里开始这张就算「上过屏」了：之后再见到它，一律走上面的免动画路径。 */
+        thumbRememberPainted(source);
       });
     });
   };
@@ -5166,6 +5258,9 @@ function itemTile(item, index) {
     state.hoverPinId != null && item.id === state.hoverPinId
       ? " is-hover-pinned"
       : "";
+  /* 上过屏的缩略图从建格子那一刻就不该有骨架微光：图基本是缓存命中的，
+     一两帧内就会盖上，闪一下灰底反而更像「在重新加载」。 */
+  const painted = thumbWasPainted(thumb) ? " is-thumb-warm" : "";
   const tabIndex =
     state.cursor === index || (state.cursor < 0 && index === 0) ? 0 : -1;
   const ariaLabel = galleryTileAriaLabel(item, index, {
@@ -5180,7 +5275,7 @@ function itemTile(item, index) {
      多出来的部分被裁掉，所以裁切这一步得收在照片自己的盒子里 ——
      这样选中时缩的是「裁好之后的画面」，四条边才会一起、一样多地往里收。
      （不然横图左右、竖图上下还顶在格子边上，看着像只有一个方向在缩） */
-  return `<div class="tile${item.kind === "video" ? " is-video" : ""}${selected}${favorite}${ratingClass}${hoverPinned}"
+  return `<div class="tile${item.kind === "video" ? " is-video" : ""}${selected}${favorite}${ratingClass}${hoverPinned}${painted}"
     data-index="${index}" role="button" tabindex="${tabIndex}" aria-label="${esc(ariaLabel)}"
     ${state.select ? `aria-pressed="${state.selected.has(index)}"` : ""}
     style="--ar:${ar.toFixed(4)};--cs:${coverScale.toFixed(4)}">
@@ -6406,6 +6501,8 @@ window.addEventListener("fotora:language-change", () => {
   }
 });
 
+/* 时间分组开启时统一按拍摄时间派生顺序；图库与相簿共用这条规则，
+   关闭分组后各自回到当前的排序偏好。 */
 function sortLibraryAlbumItems() {
   return sortAlbumItems(
     state.albumItemsRaw,
@@ -6548,18 +6645,19 @@ function setLibraryTimelineMode(mode) {
   return true;
 }
 
-function syncLibraryTimelineModeControl(
-  isLibrary = state.activeId === "library",
-) {
+function syncLibraryTimelineModeControl() {
   const control = $("#libraryTimelineModes");
   if (!control) return;
+  /* 时间按钮与右侧滑块共用同一套视图判定：图库或相簿里确有项目时
+     才提供年 / 月 / 日分组，空视图不摆空按钮。 */
   const visible =
-    isLibrary &&
+    timelineGroupingViewActive() &&
     !state.copyTarget &&
     !state.photoWall &&
     !state.filmstrip &&
     !hideLibraryTimeButtons &&
-    state.roots.length > 0;
+    state.roots.length > 0 &&
+    state.items.length > 0;
   control.hidden = !visible;
   let activeButton = null;
   for (const button of control.querySelectorAll(
@@ -6630,11 +6728,17 @@ function photoWallSurfaceActive() {
   );
 }
 
+/* 时间分组与右缘滑块不再只属于图库：当前视图是图库或任意相簿时，
+   年 / 月 / 日按钮与时间轴滑块一起生效，行为与图库完全一致。 */
+function timelineGroupingViewActive() {
+  return state.activeId === "library" || Boolean(albumById(state.activeId));
+}
+
 function libraryTimelineIsVisible() {
   const content = $("#content");
   return (
     showTimelineScrubber &&
-    state.activeId === "library" &&
+    timelineGroupingViewActive() &&
     !photoWallSurfaceActive() &&
     state.items.length > 0 &&
     !state.copyTarget &&
@@ -10517,8 +10621,32 @@ function renderAlbumView(album) {
     html += `<div class="album-grid secondary-grid">${kids.map(albumCardHTML).join("")}</div>`;
   }
   if (items.length) {
-    const cls = `photo-grid${kids.length ? " with-gap" : ""}${isOriginalRatio() ? " original" : ""}${galleryZoomClasses()}`;
-    html += progressivePhotoGridHTML(items, cls);
+    if (state.libraryTimelineMode !== "all") {
+      /* 相簿复用图库的时间分组结构：子相簿卡片在上、日期分组在下，
+         右缘滑块与分组标题因此能读到同一批节点。 */
+      const gridClass =
+        `photo-grid${isOriginalRatio() ? " original" : ""}` +
+        galleryZoomClasses();
+      const entries = groupLibraryTimelineItems().map((group) => ({
+        group,
+        entries: group.entries.map(({ item, index }) => ({ item, index })),
+      }));
+      html +=
+        `<div class="library-timeline-groups${kids.length ? " with-gap" : ""}">` +
+        entries
+          .map(
+            ({ group, entries: groupEntries }) => `
+        <section class="library-timeline-group" data-timeline-group="${esc(group.key)}">
+          <h2 class="library-timeline-group-title">${esc(group.label)}</h2>
+          ${progressivePhotoGridHTML(state.items, gridClass, groupEntries)}
+        </section>`,
+          )
+          .join("") +
+        "</div>";
+    } else {
+      const cls = `photo-grid${kids.length ? " with-gap" : ""}${isOriginalRatio() ? " original" : ""}${galleryZoomClasses()}`;
+      html += progressivePhotoGridHTML(items, cls);
+    }
   }
   return html;
 }
@@ -12718,6 +12846,9 @@ function setStatusLabelText(label, nextText) {
 
 function renderStatus() {
   const bar = $("#statusBar");
+  /* 底栏一展开，右下角就被「取消」占了；导入开始 / 取消 / 完成都会走到这里，
+     回到顶部弹簧跟着重新判定一次，不用等下一次滚动才收起。 */
+  syncBackToTop();
   /* quietUntil 是「这段时间别出声」：删照片那条链路上（挪文件、重读相簿、
      还有随后被激起的那次自动刷新）都不摆底下那条「正在…」 */
   const visible = !!state.busy && Date.now() >= quietUntil;
@@ -12879,6 +13010,16 @@ function renderMenu(kind = "photos") {
       ...group,
       items: group.items.filter(({ id }) => {
         if (!albumMenuEditMode && albumMenuHiddenItems.has(id)) return false;
+        /* 时间分组接管了顺序：分组开着时不再摆出排序入口，
+           否则会给人还能改顺序的错觉。自定义菜单时照常列出。 */
+        if (
+          id === "sort" &&
+          !albumMenuEditMode &&
+          timelineGroupingViewActive() &&
+          state.libraryTimelineMode !== "all"
+        ) {
+          return false;
+        }
         if (id === "slideshow") return canOpenSlideshow;
         if (id === "numbering" && !state.items.some(isNumberingCandidate)) {
           return false;
@@ -12996,9 +13137,6 @@ function renderMenu(kind = "photos") {
   }
   if (state.activeId === "library" || state.activeId === "favorites") {
     items = items.filter(([label]) => label !== "移出相簿");
-  }
-  if (state.activeId === "library" && state.libraryTimelineMode !== "all") {
-    items = items.filter(([label]) => label !== "排序");
   }
   const pickedForRestore =
     kind === "create"
@@ -16303,7 +16441,7 @@ function syncToolbarForState(ctx = toolbarContext()) {
   const locationsDisplayName = interfaceDisplayName("locations");
   const photoWallDisplayName = interfaceDisplayName("photoWall");
   const allAlbumsDisplayName = interfaceDisplayName("all");
-  syncLibraryTimelineModeControl(isLibrary);
+  syncLibraryTimelineModeControl();
   const backLabel = isAlbumMap
     ? isLibrary
       ? `返回${libraryDisplayName}`
@@ -16680,8 +16818,13 @@ async function submitTitleRename() {
 /* 普通相簿与图库的 DOM 和本地索引数据只在版本真正变化时重建。
    切换视图时把节点整体摘下，返回后原节点直接接回，照片元素及其解码状态
    不会被 innerHTML 销毁；入场动画仍由 revealRightContent() 重新播放。 */
-const CONTENT_VIEW_CACHE_LIMIT = 2;
-const CONTENT_VIEW_CACHE_MAX_TILES = 360;
+/* 缓存整棵内容树，等于把它那些已解码的位图一起扣在内存里，所以收不收要按
+   字节算，不能按格子数：最小档一屏能有上千格，按 360 格卡会把最常见的情况
+   直接拒掉，切回图库又得从头加载一遍。 */
+const CONTENT_VIEW_CACHE_LIMIT = 3;
+const CONTENT_VIEW_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+/* 几份缓存加起来的总上限，超了从最旧的那份开始丢。 */
+const CONTENT_VIEW_CACHE_TOTAL_BYTES = 128 * 1024 * 1024;
 const COLLECTION_DATA_CACHE_LIMIT = 4;
 const contentViewCache = new Map();
 const collectionDataCache = new Map();
@@ -16733,8 +16876,8 @@ function ordinaryContentView() {
     state.extensionFilter == null
       ? "*"
       : [...state.extensionFilter].sort().join(",");
-  return {
-    key: JSON.stringify([
+  return contentViewDescriptor(
+    [
       "content-v2",
       activeRootCacheKey(),
       isLibrary ? "library" : `album:${state.activeId}`,
@@ -16747,28 +16890,69 @@ function ordinaryContentView() {
       state.locationFilter,
       extensionFilter,
       state.itemSort,
-      state.photoZoom,
       currentPhotoStyle(),
       isOriginalRatio(),
       photoLayoutMode,
-      isLibrary ? state.libraryTimelineMode : "",
-    ]),
-  };
+      isLibrary || isAlbum ? state.libraryTimelineMode : "",
+    ],
+    state.photoZoom,
+  );
+}
+
+/* 网格档位单独挂在缓存键的尾巴上，不混进 parts：换档是就地改 DOM，
+   不会重新 render，必须能只改写档位这一位（见 rebaseRenderedContentViewZoom）。
+   早先档位埋在 parts 中间，缩放后键还停在旧档位，于是切走时那份「缩小档」
+   的网格被存进了「标准档」的缓存槽，切回来直接复用，看到的还是走之前那一档。
+   图库照片多、解码字节常常超过缓存上限而根本不入缓存，每次回来都重铺，
+   所以只有相簿露馅 —— 两边看着像两套逻辑，其实是同一套缓存错位。 */
+function contentViewDescriptor(parts, zoom) {
+  const level = clampGalleryZoom(zoom);
+  return { key: `${JSON.stringify(parts)}@z${level}`, parts, zoom: level };
+}
+
+/* 只重算键尾的档位。parts 里的 itemViewSignature 要遍历全部项目，
+   缩放手势里重算一次就是一次看得见的卡顿，所以整份沿用。 */
+function rebaseRenderedContentViewZoom(zoom) {
+  const current = renderedContentView;
+  if (!current?.parts) return;
+  const level = clampGalleryZoom(zoom);
+  if (current.zoom === level) return;
+  renderedContentView = contentViewDescriptor(current.parts, level);
+}
+
+function contentThumbDecodedBytes(root) {
+  let bytes = 0;
+  for (const img of root?.querySelectorAll?.(".tile .crop > img") || []) {
+    bytes += thumbImageBytes(img);
+  }
+  return bytes;
 }
 
 function trimContentCache() {
-  while (contentViewCache.size > CONTENT_VIEW_CACHE_LIMIT) {
-    contentViewCache.delete(contentViewCache.keys().next().value);
+  let total = 0;
+  for (const entry of contentViewCache.values()) total += entry.bytes || 0;
+  for (const key of contentViewCache.keys()) {
+    if (
+      contentViewCache.size <= CONTENT_VIEW_CACHE_LIMIT &&
+      total <= CONTENT_VIEW_CACHE_TOTAL_BYTES
+    ) {
+      break;
+    }
+    const entry = contentViewCache.get(key);
+    contentViewCache.delete(key);
+    /* 明确把子树丢掉：只删 Map 里那条引用，位图还得等 GC 才肯放手。 */
+    entry?.fragment?.replaceChildren();
+    total -= entry?.bytes || 0;
   }
 }
 
 function cacheCurrentContentView() {
   const content = $("#content");
   const descriptor = renderedContentView;
+  const bytes = contentThumbDecodedBytes(content);
   if (
     hasIncompleteProgressivePhotoGrid() ||
-    content?.querySelectorAll(".tile[data-index]").length >
-      CONTENT_VIEW_CACHE_MAX_TILES
+    bytes > CONTENT_VIEW_CACHE_MAX_BYTES
   ) {
     cancelProgressivePhotoGridFill();
     content?.replaceChildren();
@@ -16783,7 +16967,7 @@ function cacheCurrentContentView() {
   const fragment = document.createDocumentFragment();
   while (content.firstChild) fragment.append(content.firstChild);
   contentViewCache.delete(descriptor.key);
-  contentViewCache.set(descriptor.key, { fragment });
+  contentViewCache.set(descriptor.key, { fragment, bytes });
   trimContentCache();
   renderedContentView = null;
 }
@@ -17019,7 +17203,7 @@ function render({
   }
   $("#content").classList.toggle(
     "library-timeline-mode",
-    isLibrary && state.libraryTimelineMode !== "all",
+    (isLibrary || Boolean(album)) && state.libraryTimelineMode !== "all",
   );
   syncLibraryTimelineScrubber({ rebuildTicks: true });
   $("#content").classList.toggle(
@@ -17112,6 +17296,9 @@ function render({
     Boolean(contentCrossfadeMotion?.snapshot?.isConnected),
   );
   scheduleVisibleContextMapPreviews();
+  /* 视图落定了（导入完成 / 切图库 / 切相簿都会走到这里）：
+     从当前可见区开始，往下按顺序把缩略图补起来。 */
+  armThumbPrefetch();
 }
 
 function syncSelectionBar() {
@@ -17146,7 +17333,7 @@ async function loadAlbum(albumId, { request = null } = {}) {
   if (!cached) cacheCollectionData("album", albumId, data);
   state.album = data.album;
   state.albumItemsRaw = Array.isArray(data.items) ? data.items : [];
-  state.albumItems = sortAlbumItems(state.albumItemsRaw, state.itemSort);
+  state.albumItems = sortLibraryAlbumItems();
   state.items = visibleAlbumItems();
   state.busy = "";
 }
@@ -17464,7 +17651,10 @@ function updateAlbumItems(mutate, { crossfade = false } = {}) {
   const contentCrossfade = crossfade ? beginContentCrossfade() : null;
   const update = () => {
     mutate();
-    if (state.activeId === "library") {
+    if (
+      state.activeId === "library" ||
+      (Number.isInteger(state.activeId) && state.libraryTimelineMode !== "all")
+    ) {
       state.albumItems = sortLibraryAlbumItems();
     }
     state.items = visibleAlbumItems();
@@ -18112,7 +18302,7 @@ function classifyAlbumWheel(event) {
 function stepAlbumWheelScroll(timestamp) {
   albumWheelScroll.frame = 0;
   const content = $("#content");
-  if (!content || state.photoWall || !$("#viewer").hidden) {
+  if (!content || state.photoWall || viewerBlocksGalleryWheel()) {
     cancelAlbumWheelScroll();
     return;
   }
@@ -18153,7 +18343,7 @@ function smoothAlbumWheelScroll(event) {
     event.metaKey ||
     state.photoWall ||
     state.copyTarget ||
-    !$("#viewer").hidden
+    viewerBlocksGalleryWheel()
   )
     return;
   const content = $("#content");
@@ -20840,7 +21030,11 @@ function detachPhotoDeleteGhosts(before, items) {
     const tile = entry?.tile;
     if (!entry || !tile?.isConnected) continue;
     const ghost = document.createElement("div");
-    ghost.className = "photo-grid gallery-square photo-delete-ghost";
+    /* 带上当前档位，删除动画的替身才能继承对的圆角：无缝档（1/2/3）
+       圆角是 0，跟方方正正铺满的网格一致，不会闪出一个圆角的 ghost。 */
+    ghost.className = `photo-grid gallery-square gallery-zoom-${clampGalleryZoom(
+      state.photoZoom,
+    )} photo-delete-ghost`;
     ghost.setAttribute("aria-hidden", "true");
     ghost.style.left = `${entry.left}px`;
     ghost.style.top = `${entry.top}px`;
@@ -21966,7 +22160,7 @@ function animateDialogPairOut(card, dim, existingAnims, duration = 120) {
 function animateCardOut(
   el,
   existingAnims,
-  { duration = 120, endScale = 0.96, endTranslateY = 0 } = {},
+  { duration = 120, endScale = 0.96 } = {},
 ) {
   const frame = captureVisualFrame(el);
   existingAnims.forEach((anim) => anim.cancel());
@@ -21980,12 +22174,9 @@ function animateCardOut(
       frame,
       reducedMotion
         ? { opacity: 0, transform: frame.transform }
-        : {
-            opacity: 0,
-            transform: `translateY(${endTranslateY}px) scale(${scale})`,
-          },
+        : { opacity: 0, transform: `scale(${scale})` },
     ],
-    { duration: resolvedDuration, easing: UI_EASE_OUT, fill: "forwards" },
+    { duration: resolvedDuration, easing: ASK_EASE_DISMISS, fill: "forwards" },
   );
 }
 
@@ -21995,9 +22186,15 @@ let askAnims = [];
 let askConfirmReadyAt = 0;
 let askAnchorBtn = null; /* 确认面板贴着哪颗按钮（centered 时为 null） */
 let askCentered = false;
+let askWide = false; /* 长文案面板加宽一档，避免每段末尾吊一个字 */
 
-const ASK_POP_MS = 200;
-const ASK_OUT_MS = 130;
+/* 入场：从中心（或贴着的那颗按钮）放大浮现；退场：朝同一个原点缩回去淡出。
+   时长直接取 motion.css 那两档共享值：进场 210ms、退场 140ms。 */
+const ASK_POP_MS = 210;
+const ASK_OUT_MS = 140;
+const ASK_EASE_POP = UI_EASE_OUT;
+/* 退场反过来用加速曲线：越收越快，不在半路拖泥带水 */
+const ASK_EASE_DISMISS = "cubic-bezier(0.4, 0, 1, 1)";
 const ASK_CONFIRM_GUARD_MS = 160;
 
 /* 按当前窗口几何重新落位确认面板：窗口缩放时重定位而不是收掉，
@@ -22008,7 +22205,9 @@ function placeAsk() {
   const pad = 10;
   const main = $(".main").getBoundingClientRect();
   const available = Math.max(200, main.width - pad * 2);
-  card.style.width = `${Math.min(354, available)}px`;
+  /* 常规 354；wide 用于「清除所有数据」这类三段长文案，加宽到 420
+     让每段最多两行、末尾不吊单字。 */
+  card.style.width = `${Math.min(askWide ? 420 : 354, available)}px`;
   const w = card.offsetWidth;
   const h = card.offsetHeight;
   const minTop =
@@ -22029,14 +22228,39 @@ function placeAsk() {
     card.style.left = `${left}px`;
     card.style.top = `${top}px`;
   }
+
+  /* 放大入场的原点：居中面板从自己中心长出来；贴按钮的面板从按钮
+     中心长出来，看起来像从触发它的那颗按钮展开。 */
+  if (askCentered || !askAnchorBtn) {
+    card.style.transformOrigin = "50% 50%";
+  } else {
+    const btn = askAnchorBtn.getBoundingClientRect();
+    const axis = (delta, size) =>
+      `${Math.min(85, Math.max(15, (delta / size) * 100))}%`;
+    card.style.transformOrigin =
+      `${axis(btn.left + btn.width / 2 - card.offsetLeft, w)} ` +
+      axis(btn.top + btn.height / 2 - card.offsetTop, h);
+  }
 }
 
 function askConfirm(
   anchorBtn,
-  { title, message, note = "", actionText, centered = false },
+  {
+    title,
+    message,
+    note = "",
+    actionText,
+    centered = false,
+    alert = false,
+    wide = false,
+  },
 ) {
   const wrap = $("#ask");
   const card = $("#askCard");
+  /* alert = 只有一个动作的告知面板（例如「正在导出，稍后再清除数据」），
+     和两键确认共用同一张卡片、同一套动效。 */
+  card.classList.toggle("is-alert", alert);
+  $("#askCancel").hidden = alert;
   $("#askTitle").textContent = uiText(title);
   $("#askMsg").textContent = uiText(message);
   $("#askNote").textContent = uiText(note);
@@ -22046,6 +22270,7 @@ function askConfirm(
 
   askAnchorBtn = anchorBtn || null;
   askCentered = centered;
+  askWide = wide;
   placeAsk();
 
   askOpen = true;
@@ -22054,20 +22279,29 @@ function askConfirm(
   const reducedMotion = window.matchMedia(
     "(prefers-reduced-motion: reduce)",
   ).matches;
+  const dim = wrap.querySelector(".ask-dim");
+  /* 放大浮现：不透明度先到位，缩放再收一点点尾巴。和重命名那类面板是同一套动作，
+     只是原点换成 placeAsk() 算出来的那个（居中 = 卡片中心，贴按钮 = 按钮中心）。 */
   askAnims = [
     card.animate(
       reducedMotion
         ? [{ opacity: 0 }, { opacity: 1 }]
         : [
-            { opacity: 0, transform: "translateY(6px) scale(0.985)" },
-            { opacity: 1, transform: "translateY(0) scale(1)" },
+            { opacity: 0, transform: "scale(0.92)" },
+            { opacity: 1, transform: "scale(1.004)", offset: 0.72 },
+            { opacity: 1, transform: "scale(1)" },
           ],
       {
         duration: reducedMotion ? DIALOG_REDUCED_MS : ASK_POP_MS,
-        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+        easing: ASK_EASE_POP,
         fill: "backwards",
       },
     ),
+    dim.animate([{ opacity: 0 }, { opacity: 1 }], {
+      duration: reducedMotion ? DIALOG_REDUCED_MS : ASK_POP_MS,
+      easing: ASK_EASE_POP,
+      fill: "backwards",
+    }),
   ];
   return new Promise((resolve) => {
     askDone = resolve;
@@ -22078,11 +22312,22 @@ function askClose(answer) {
   if (!askOpen) return;
   askOpen = false;
   const card = $("#askCard");
+  const dim = $("#ask").querySelector(".ask-dim");
+  const reducedMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  /* 先记下遮罩当前这一帧：入场还没放完就被关掉时，要从这一帧接着淡出，
+     不能先跳回全暗再开始收（animateCardOut 会把入场动画取消掉）。 */
+  const dimFrame = captureVisualFrame(dim);
   const out = [
     animateCardOut(card, askAnims, {
       duration: ASK_OUT_MS,
-      endScale: 0.99,
-      endTranslateY: 4,
+      endScale: 0.95,
+    }),
+    dim.animate([{ opacity: dimFrame.opacity }, { opacity: 0 }], {
+      duration: reducedMotion ? DIALOG_REDUCED_MS : ASK_OUT_MS,
+      easing: ASK_EASE_DISMISS,
+      fill: "forwards",
     }),
   ];
   askAnims = out;
@@ -23140,7 +23385,8 @@ function dateMetadataChangesCurrentOrder() {
   if (state.activeId === "locations") {
     return state.locationSubview !== "map";
   }
-  if (state.activeId === "library") {
+  if (state.activeId === "library" || Number.isInteger(state.activeId)) {
+    /* 相簿开启时间分组后顺序同样由拍摄时间决定，日期改动要重新归位。 */
     return (
       state.libraryTimelineMode !== "all" ||
       state.itemSort === "newest" ||
@@ -23148,7 +23394,7 @@ function dateMetadataChangesCurrentOrder() {
     );
   }
   return (
-    (state.activeId === "favorites" || Number.isInteger(state.activeId)) &&
+    state.activeId === "favorites" &&
     (state.itemSort === "newest" || state.itemSort === "oldest")
   );
 }
@@ -23162,8 +23408,17 @@ function resortActiveCollectionForNewCaptureTime() {
     state.items = visibleAlbumItems();
     return true;
   }
-  if (state.activeId === "favorites" || Number.isInteger(state.activeId)) {
+  if (state.activeId === "favorites") {
     state.albumItems = sortAlbumItems(state.albumItemsRaw, state.itemSort);
+    state.items = visibleAlbumItems();
+    return true;
+  }
+  if (Number.isInteger(state.activeId)) {
+    /* 相簿开了时间分组就与图库一样按时间归位，否则保持当前排序偏好。 */
+    state.albumItems =
+      state.libraryTimelineMode !== "all"
+        ? sortLibraryAlbumItems()
+        : sortAlbumItems(state.albumItemsRaw, state.itemSort);
     state.items = visibleAlbumItems();
     return true;
   }
@@ -24099,6 +24354,14 @@ function cyclePhotoStyle({ animate = false } = {}) {
 /* ---------------------- 相簿 / 图库照片墙四档大小 ---------------------- */
 
 const GALLERY_WHEEL_GESTURE_IDLE_MS = 90;
+/* 触控板捏合发来的 ctrl+wheel 是一串很小的增量（一格鼠标滚轮约 100px）。
+   锁定期间继续累计这些增量，走够一段就放行下一档，一次捏合因此能连贯地
+   跨好几档，跟 iOS 相册的捏合手感一致；鼠标滚轮仍是一格一档，
+   不会一推就飞到底。 */
+const GALLERY_WHEEL_PINCH_REPEAT_PX = 160;
+const galleryWheelIsPinch = (event) =>
+  event.deltaMode === 0 &&
+  Math.abs(event.deltaY) < ALBUM_WHEEL_SMOOTHING.minNotchPx;
 const GALLERY_ZOOM_MS = 180;
 const GALLERY_FLIP_TILE_LIMIT = 140;
 /* 浏览界面只使用按网格档位生成的缩略图。高分辨率图片留给查看器和编辑器。 */
@@ -24199,6 +24462,9 @@ function loadGalleryWindowImage(tile) {
     tile.classList.remove("failed", "failed-video", "is-thumb-retrying");
     tile.classList.remove("is-load-failed");
     tile.querySelector(".tile-retry")?.remove();
+    /* 换图了：新地址自己上过屏就继续免动画，没上过屏就把免动画标记摘掉，
+       让骨架正常顶住这段真正的加载。 */
+    tile.classList.toggle("is-thumb-warm", thumbWasPainted(src));
     img.src = src;
   }
   /* 缓存缩略图可能已经 complete，onload 不会再触发；主动补一次就绪同步，
@@ -24324,6 +24590,640 @@ function observeGalleryImageTiles(grids = photoLayoutGrids()) {
   scheduleVisibleGalleryImageSweep(grids);
 }
 
+/* ---------------------- 缩略图解码缓存 ---------------------- */
+/* 「滑回去还要重新加载一遍」拆开是三笔开销：
+   1. 虚拟网格把滑出窗口的格子整个 remove()，回来时重建节点；
+   2. 重建的 <img> 要重新走一遍请求和解码，哪怕磁盘缓存和 HTTP 缓存都命中；
+   3. 解码完还要重播入场动画（两帧 + 210ms 淡入），和第一次冷加载一模一样。
+   第 3 笔占了体感的绝大部分，而它其实没有必要 —— 这张画面早就上过屏了。
+   所以这里分三层把它省掉：已上屏标记负责关掉动画，离屏解码池负责留住解码好的
+   节点，提前解码负责在用户滑到之前就把节点备好。 */
+
+/* 解码后的位图按 宽 × 高 × 4 字节算内存。这里只管「离屏」那一份的预算：
+   屏幕上活着的格子由虚拟窗口自己按行数限住，不必再算一遍。
+   预算跟着机器内存走（deviceMemory 单位是 GB），8GB 及以上给满额。 */
+const THUMB_DECODE_POOL_BUDGET_BASE_MB = 96;
+const THUMB_DECODE_POOL_BUDGET_MIN_MB = 48;
+const THUMB_DECODE_POOL_BUDGET_MAX_MB = 160;
+/* 数量上限：最小档一格才几十 KB，只按内存收口会在池子里攒下上万个节点，
+   光是遍历和淘汰就够慢的。 */
+const THUMB_DECODE_POOL_MAX_ENTRIES = 900;
+/* 记住多少条「已经上过屏」的 URL。一条几十字节，两万条不到 2MB，
+   换来的是滚回看过的区域时连一帧灰底都不闪。 */
+const THUMB_PAINTED_URL_LIMIT = 20000;
+
+function thumbDecodePoolBudgetBytes() {
+  const memoryGb = Number(navigator.deviceMemory) || 8;
+  const scale = Math.min(1, Math.max(0.5, memoryGb / 8));
+  const mb = Math.min(
+    THUMB_DECODE_POOL_BUDGET_MAX_MB,
+    Math.max(
+      THUMB_DECODE_POOL_BUDGET_MIN_MB,
+      Math.round(THUMB_DECODE_POOL_BUDGET_BASE_MB * scale),
+    ),
+  );
+  return mb * 1024 * 1024;
+}
+
+const THUMB_DECODE_POOL_BUDGET = thumbDecodePoolBudgetBytes();
+/* url -> 离屏的 <img>。Map 的插入顺序就是 LRU 顺序：最近用到的排在最后。 */
+const thumbDecodePool = new Map();
+let thumbDecodePoolBytes = 0;
+/* 池子里存的是哪一档尺寸。换网格档位等于换一批 URL，整池作废。 */
+let thumbDecodePoolZoomSize = 0;
+const thumbPaintedUrls = new Set();
+const thumbPaintedOrder = [];
+
+const thumbImageBytes = (img) =>
+  (img?.naturalWidth || 0) * (img?.naturalHeight || 0) * 4;
+
+/* 池子的键就是 <img src="..."> 的字面值，和 itemTile 生成的 URL 完全一致，
+   回收和领用才对得上。currentSrc 是绝对地址，不能拿来当键。 */
+const thumbImageKey = (img) => img?.getAttribute?.("src") || "";
+
+function thumbRememberPainted(url) {
+  if (!url || url.startsWith("data:") || thumbPaintedUrls.has(url)) return;
+  thumbPaintedUrls.add(url);
+  thumbPaintedOrder.push(url);
+  while (thumbPaintedOrder.length > THUMB_PAINTED_URL_LIMIT) {
+    thumbPaintedUrls.delete(thumbPaintedOrder.shift());
+  }
+}
+
+const thumbWasPainted = (url) => !!url && thumbPaintedUrls.has(url);
+
+/* 真正把位图丢掉：断开 src，浏览器才会释放这份解码内存。 */
+function thumbDiscardPoolImage(img) {
+  img.onload = null;
+  img.onerror = null;
+  img.removeAttribute("src");
+}
+
+function thumbPoolForget(url) {
+  const img = thumbDecodePool.get(url);
+  if (!img) return;
+  thumbDecodePool.delete(url);
+  thumbDecodePoolBytes = Math.max(
+    0,
+    thumbDecodePoolBytes - thumbImageBytes(img),
+  );
+  thumbDiscardPoolImage(img);
+}
+
+/* 收进池子。能进来的都是完整解码过的，所以顺手记成「已上屏」——
+   即使之后被预算挤出去，下次再见到这张也不会重播入场动画。 */
+function thumbPoolKeep(url, img) {
+  if (!img || !url || url.startsWith("data:")) return;
+  const bytes = thumbImageBytes(img);
+  if (!bytes) return;
+  thumbRememberPainted(url);
+  if (thumbDecodePool.has(url)) thumbPoolForget(url);
+  img.onload = null;
+  img.onerror = null;
+  thumbDecodePool.set(url, img);
+  thumbDecodePoolBytes += bytes;
+  thumbTrimDecodePool();
+}
+
+function thumbPoolTake(url) {
+  const img = url ? thumbDecodePool.get(url) : null;
+  if (!img) return null;
+  thumbDecodePool.delete(url);
+  thumbDecodePoolBytes = Math.max(
+    0,
+    thumbDecodePoolBytes - thumbImageBytes(img),
+  );
+  return img;
+}
+
+const thumbPoolHas = (url) => !!url && thumbDecodePool.has(url);
+
+/* 先按内存预算收，再按数量收，两个都从最旧的开始丢。
+   Map 在迭代过程中删掉当前项是明确定义的，不用先拷一份键出来。 */
+function thumbTrimDecodePool(budget = THUMB_DECODE_POOL_BUDGET) {
+  const satisfied = () =>
+    thumbDecodePoolBytes <= budget &&
+    thumbDecodePool.size <= THUMB_DECODE_POOL_MAX_ENTRIES;
+  if (satisfied()) return;
+  for (const [url] of thumbDecodePool) {
+    if (satisfied()) break;
+    thumbPoolForget(url);
+  }
+}
+
+function thumbClearDecodePool() {
+  for (const [, img] of thumbDecodePool) thumbDiscardPoolImage(img);
+  thumbDecodePool.clear();
+  thumbDecodePoolBytes = 0;
+}
+
+/* 换网格档位 = 换一档缩略图尺寸，池子里全是旧尺寸的 URL，
+   留着只会白占内存，直接清掉。 */
+function syncThumbDecodePoolZoomSize(level = state.photoZoom) {
+  const size = galleryThumbSizeForZoom(level);
+  if (thumbDecodePoolZoomSize === size) return;
+  if (thumbDecodePoolZoomSize) thumbClearDecodePool();
+  thumbDecodePoolZoomSize = size;
+}
+
+/* 格子被回收时把已经解码好的 <img> 摘下来交给池子。节点还是那张图，
+   下次同一 URL 的格子直接接回去 —— 不必重新请求，也不必重新解码。 */
+function donateThumbDecodeImage(tile) {
+  const img = tile?.querySelector?.(".crop > img");
+  if (!img || img.dataset.galleryWindowUnloaded === "true") return;
+  if (!img.complete || !img.naturalWidth) return;
+  const url = thumbImageKey(img);
+  /* URL 和当前档位对不上（换过档、照片被编辑过）就别留了，领不回去。 */
+  if (!url || url.startsWith("data:") || url !== galleryTileThumbSrc(tile)) {
+    return;
+  }
+  img.remove();
+  thumbPoolKeep(url, img);
+}
+
+/* 新建的格子里先按 URL 领一张池子里现成的图。领到的节点已经解码完成，
+   插进 DOM 的那一帧画面就在，连 onload 都不用等。 */
+function adoptThumbDecodeImage(tile) {
+  const placeholder = tile?.querySelector?.(".crop > img");
+  if (!placeholder) return null;
+  const img = thumbPoolTake(thumbImageKey(placeholder));
+  if (!img) return null;
+  /* 池子里的节点是上一轮回收进来的，加载属性和事件都要按新格子重新接一遍：
+     之后换档或重试会改 src，那时候还得靠 onload / onerror 走原来的流程。 */
+  img.alt = "";
+  img.draggable = false;
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.dataset.galleryThumbSize = String(galleryThumbSizeForZoom());
+  delete img.dataset.galleryWindowUnloaded;
+  delete img.dataset.galleryThumbRetrySource;
+  delete img.dataset.galleryThumbRetryAttempt;
+  delete img.dataset.galleryThumbRecovered;
+  const failureClass = tile.classList.contains("is-video")
+    ? "failed-video"
+    : "failed";
+  img.onload = () => syncTileAspect(img);
+  img.onerror = () => handleGalleryThumbError(img, failureClass);
+  placeholder.replaceWith(img);
+  return img;
+}
+
+/* ---------------------- 缩略图后台预生成 ---------------------- */
+/* 网格是虚拟化的：只有滚进可见区的格子才去要图，所以往下滑永远是在「现做」缩略图，
+   看到的就是灰骨架，还容易点到没加载好的那一格。这里改成滚到哪里就先补哪里：
+   以当前可见区为锚，先顺着往下一路补，再回头补上面，用户还没滑到的部分慢慢做。
+   服务端有名额闸门（server/thumb-scheduler.js），可见区那一张永远优先，
+   预热只吃空闲名额；滚到正在预热的格子上时，它会被提到队首立刻开工。 */
+/* 一批提交多少张。服务端那边一次最多收 96 张，这里取 24：整库刚导入时
+   缩略图全是冷的，批量太小就会被「提交速率」而不是「生成速率」卡住，
+   往下滑还是能看到灰骨架。 */
+const THUMB_PREFETCH_BATCH = 24;
+/* 以可见区为锚，向下 / 向上各最多补这么多张；更远的等滚过去再排。 */
+const THUMB_PREFETCH_AHEAD = 2400;
+/* 一批的超时：视频抽帧慢的时候，别把整条预热卡死。
+   这是纯粹的兜底 —— 一整批都是视频、又只有一份空闲名额时也能跑完，
+   所以给得比较宽。 */
+const THUMB_PREFETCH_TIMEOUT_MS = 45000;
+/* 两批之间歇一下，别把本地服务的连接和 CPU 占满。 */
+const THUMB_PREFETCH_TICK_MS = 240;
+/* 暂时不该发请求（导入中 / 渐进填充中 / 查看器打开）时的巡检间隔。 */
+const THUMB_PREFETCH_IDLE_MS = 1500;
+/* 视野挪动超过这么多张才重排计划：小幅滚动继续按原计划补，省得来回折腾。 */
+const THUMB_PREFETCH_REANCHOR_MIN = 16;
+/* 挪动超过这么多张算大跳（拖滚动条 / 跳到某个日期）：在途那一批已经没意义，掐掉。 */
+const THUMB_PREFETCH_JUMP_MIN = 200;
+/* 大跳之后先等视野停稳这么久再补预热。拖滚动条时中间会划过一大堆无关区间，
+   立刻排计划等于刚排好就作废；停稳了再补，省下来的名额都留给可见区。 */
+const THUMB_PREFETCH_SETTLE_MS = 200;
+/* 记住最近确认处理过的缩略图，同一张不再反复提交。 */
+/* 整库预热要跑几万个键，上限太小会把刚记住的又挤出去、反复提交同一张。
+   一条键几十字节，两万四千条也就 1MB 出头。 */
+const THUMB_PREFETCH_WARMED_LIMIT = 24000;
+/* 服务端确认落盘之后，趁空闲把这批缩略图真的下载 + 解码成离屏节点。
+   并发压到 6：再高就会和可见区的请求抢连接，反而拖慢用户正在看的那一格。 */
+const THUMB_DECODE_AHEAD_CONCURRENCY = 6;
+/* 一次最多提前解码多少张，够滑好几屏，也免得池子被远处的图占满。 */
+const THUMB_DECODE_AHEAD_LIMIT = 600;
+/* 滚动中不解码：解码是主线程的活儿，和滚动抢帧只会让画面更卡。
+   停下来这么久之后才恢复。 */
+const THUMB_DECODE_AHEAD_SCROLL_QUIET_MS = 140;
+/* requestIdleCallback 的兜底超时：一直不空闲也要往前走，别把预热饿死。 */
+const THUMB_DECODE_AHEAD_IDLE_TIMEOUT_MS = 400;
+
+let thumbPrefetchPlan = [];
+let thumbPrefetchCursor = 0;
+let thumbPrefetchSize = 0;
+let thumbPrefetchAnchor = -1;
+let thumbPrefetchViewKey = "";
+let thumbPrefetchTimer = 0;
+let thumbPrefetchInFlight = null;
+let thumbPrefetchScrollDirty = false;
+let thumbPrefetchSettleUntil = 0;
+const thumbPrefetchWarmed = new Set();
+const thumbPrefetchWarmedOrder = [];
+const thumbDecodeAheadQueue = [];
+const thumbDecodeAheadQueued = new Set();
+let thumbDecodeAheadInFlight = 0;
+let thumbDecodeAheadScheduled = 0;
+let thumbDecodeAheadUsesIdle = false;
+let thumbDecodeScrollQuietUntil = 0;
+
+const thumbPrefetchKeyOf = (item, size) =>
+  `${item.id}:${size}:${itemThumbVersion(item)}`;
+
+/* 视图身份：换图库 / 换相簿 / 换网格档位都算换了一个视图，计划要整个重排。 */
+function thumbPrefetchViewKeyFor(size) {
+  const items = state.items;
+  if (!items.length) return "";
+  return [
+    state.activeId,
+    items.length,
+    size,
+    items[0]?.id ?? "",
+    items[items.length - 1]?.id ?? "",
+  ].join(":");
+}
+
+/* 可见区覆盖了 state.items 里的哪一段序号。虚拟网格只渲染窗口内的 tile，
+   所以直接量 DOM 就够，不用自己另算一套滚动位置。 */
+function galleryViewportIndexRange() {
+  const content = $("#content");
+  if (!content) return null;
+  const contentRect = content.getBoundingClientRect();
+  let first = -1;
+  let last = -1;
+  for (const grid of photoLayoutGrids()) {
+    for (const tile of grid.querySelectorAll(":scope > .tile[data-index]")) {
+      const rect = tile.getBoundingClientRect();
+      if (rect.bottom < contentRect.top || rect.top > contentRect.bottom) {
+        continue;
+      }
+      const index = Number(tile.dataset.index);
+      if (!Number.isInteger(index) || index < 0) continue;
+      if (first < 0 || index < first) first = index;
+      if (index > last) last = index;
+    }
+  }
+  if (first < 0) return null;
+  return { first, last };
+}
+
+/* 预生成这条线该不该活着：还在照片网格里、窗口在前台、库里有东西。
+   查看器打开时它仍然活着，只是慢速巡检，等查看器一关就立刻接着补。 */
+function thumbPrefetchAlive() {
+  if (document.hidden) return false;
+  if (!canZoomGallery()) return false;
+  if ($("#content")?.hidden) return false;
+  return state.items.length > 0;
+}
+
+/* 这一刻能不能真的发一批：可见区自己还在忙就先让路。 */
+function thumbPrefetchReady() {
+  if (!thumbPrefetchAlive()) return false;
+  if (thumbPrefetchInFlight) return false;
+  if (!$("#viewer")?.hidden) return false;
+  if (state.busy || rootImportRunning()) return false;
+  /* 渐进填充还在往网格里塞格子，这时候量出来的可见区不准。 */
+  return !hasIncompleteProgressivePhotoGrid();
+}
+
+/* 计划顺序 = 先顺着可见区往下，再回头往上补。
+   导入完图库之后人基本都是一路向下翻，所以向下那段排最前面。 */
+function buildThumbPrefetchPlan(range) {
+  const items = state.items;
+  const plan = [];
+  const downEnd = Math.min(items.length - 1, range.last + THUMB_PREFETCH_AHEAD);
+  for (let index = range.last + 1; index <= downEnd; index += 1) {
+    plan.push(items[index]);
+  }
+  const upStart = Math.max(0, range.first - THUMB_PREFETCH_AHEAD);
+  for (let index = range.first - 1; index >= upStart; index -= 1) {
+    plan.push(items[index]);
+  }
+  /* 近处这两段排完之后，接着往两端把整库铺满。刚导入的图库缩略图全是冷的，
+     只补 ±2400 张意味着用户第一次滑到更远处仍然得等现做；空闲名额本来就闲着，
+     让它在后台一路做完，之后不管跳到哪一段都是热的。 */
+  for (let index = downEnd + 1; index < items.length; index += 1) {
+    plan.push(items[index]);
+  }
+  for (let index = upStart - 1; index >= 0; index -= 1) {
+    plan.push(items[index]);
+  }
+  return plan.filter(Boolean);
+}
+
+function rebuildThumbPrefetchPlan(range, size) {
+  thumbPrefetchPlan = buildThumbPrefetchPlan(range);
+  thumbPrefetchCursor = 0;
+  thumbPrefetchSize = size;
+  thumbPrefetchAnchor = range.first;
+  thumbPrefetchViewKey = thumbPrefetchViewKeyFor(size);
+}
+
+function resetThumbPrefetchPlan(size) {
+  thumbPrefetchPlan = [];
+  thumbPrefetchCursor = 0;
+  thumbPrefetchSize = size;
+  /* 锚点 -1 = 现在量不到可见区（网格还没排好 / 内容区被藏起来），
+     下一次能量到的时候整个重排。 */
+  thumbPrefetchAnchor = -1;
+  thumbPrefetchViewKey = thumbPrefetchViewKeyFor(size);
+}
+
+function nextThumbPrefetchBatch() {
+  const ids = [];
+  const keys = [];
+  const items = [];
+  while (
+    thumbPrefetchCursor < thumbPrefetchPlan.length &&
+    ids.length < THUMB_PREFETCH_BATCH
+  ) {
+    const item = thumbPrefetchPlan[thumbPrefetchCursor];
+    thumbPrefetchCursor += 1;
+    if (!item) continue;
+    const key = thumbPrefetchKeyOf(item, thumbPrefetchSize);
+    /* 已经处理过的跳过；确定做不出缩略图的格式也记在里面，不再一遍遍试。 */
+    if (thumbPrefetchWarmed.has(key)) continue;
+    ids.push(item.id);
+    keys.push(key);
+    items.push(item);
+  }
+  return { ids, keys, items };
+}
+
+function rememberThumbPrefetchWarmed(keys) {
+  for (const key of keys) {
+    if (thumbPrefetchWarmed.has(key)) continue;
+    thumbPrefetchWarmed.add(key);
+    thumbPrefetchWarmedOrder.push(key);
+  }
+  while (thumbPrefetchWarmedOrder.length > THUMB_PREFETCH_WARMED_LIMIT) {
+    thumbPrefetchWarmed.delete(thumbPrefetchWarmedOrder.shift());
+  }
+}
+
+/* ---------------------- 提前解码 ---------------------- */
+/* 服务端只负责把缩略图写到磁盘上；浏览器这边还得请求一次、解码一次才有画面。
+   这两步都能在用户滑到之前做完：确认落盘的那一批直接排进解码队列，
+   空闲时下载并解码成离屏节点存进池子。等格子真的建出来，
+   它领到的是一张已经解码好的图，插进 DOM 的那一帧画面就在了。 */
+
+/* 这一刻该不该解码：可见区、查看器、导入和缩放动画都在抢主线程，先让路。 */
+function thumbDecodeAheadWanted() {
+  if (!thumbPrefetchAlive()) return false;
+  if (!$("#viewer")?.hidden) return false;
+  if (state.busy || rootImportRunning()) return false;
+  return !galleryZoomBusy;
+}
+
+function scheduleThumbDecodeAhead(delay = 120) {
+  if (thumbDecodeAheadScheduled) return;
+  const run = () => {
+    thumbDecodeAheadScheduled = 0;
+    pumpThumbDecodeAhead();
+  };
+  if (typeof requestIdleCallback === "function") {
+    thumbDecodeAheadUsesIdle = true;
+    thumbDecodeAheadScheduled = requestIdleCallback(run, {
+      timeout: THUMB_DECODE_AHEAD_IDLE_TIMEOUT_MS,
+    });
+  } else {
+    thumbDecodeAheadUsesIdle = false;
+    thumbDecodeAheadScheduled = setTimeout(run, delay);
+  }
+}
+
+function stopThumbDecodeAhead() {
+  thumbDecodeAheadQueue.length = 0;
+  thumbDecodeAheadQueued.clear();
+  if (!thumbDecodeAheadScheduled) return;
+  if (thumbDecodeAheadUsesIdle && typeof cancelIdleCallback === "function") {
+    cancelIdleCallback(thumbDecodeAheadScheduled);
+  } else {
+    clearTimeout(thumbDecodeAheadScheduled);
+  }
+  thumbDecodeAheadScheduled = 0;
+}
+
+/* 排一批刚确认落盘的缩略图。size 必须和网格现在用的那一档一致，
+   否则解出来的 URL 和格子里要的不是同一张，白占内存。 */
+function queueThumbDecodeAhead(items, size) {
+  if (!items?.length || size !== galleryThumbSizeForZoom()) return;
+  for (const item of items) {
+    if (!item) continue;
+    if (thumbDecodeAheadQueue.length >= THUMB_DECODE_AHEAD_LIMIT) break;
+    const url = itemThumbUrl(item, size, "inside");
+    if (thumbPoolHas(url) || thumbDecodeAheadQueued.has(url)) continue;
+    thumbDecodeAheadQueued.add(url);
+    thumbDecodeAheadQueue.push(url);
+  }
+  if (thumbDecodeAheadQueue.length) scheduleThumbDecodeAhead();
+}
+
+function startThumbDecodeAhead(url) {
+  thumbDecodeAheadInFlight += 1;
+  const img = new Image();
+  img.decoding = "async";
+  const finish = () => {
+    thumbDecodeAheadInFlight = Math.max(0, thumbDecodeAheadInFlight - 1);
+    pumpThumbDecodeAhead();
+  };
+  img.onload = () => {
+    /* decode() 把位图真正准备好；解不动也不算失败，交给格子自己再走一遍。 */
+    const decoded =
+      typeof img.decode === "function"
+        ? img.decode().catch(() => {})
+        : Promise.resolve();
+    decoded.then(() => {
+      if (!thumbPoolHas(url)) thumbPoolKeep(url, img);
+      finish();
+    });
+  };
+  /* 取不到就不管了：真滑到那儿时格子自己会去要，
+     服务端的名额闸门保证可见区那一张永远优先。 */
+  img.onerror = finish;
+  img.src = url;
+}
+
+function pumpThumbDecodeAhead() {
+  if (document.hidden || !thumbDecodeAheadQueue.length) return;
+  if (!thumbDecodeAheadWanted()) {
+    /* 只是暂时让路，队列留着；查看器一关、导入一结束就接着解。 */
+    scheduleThumbDecodeAhead(THUMB_PREFETCH_IDLE_MS);
+    return;
+  }
+  const wait = thumbDecodeScrollQuietUntil - performance.now();
+  if (wait > 0) {
+    scheduleThumbDecodeAhead(wait);
+    return;
+  }
+  while (
+    thumbDecodeAheadInFlight < THUMB_DECODE_AHEAD_CONCURRENCY &&
+    thumbDecodeAheadQueue.length
+  ) {
+    const url = thumbDecodeAheadQueue.shift();
+    thumbDecodeAheadQueued.delete(url);
+    /* 池子里已经有这张，说明格子自己先拿到了，不必重复解一遍。 */
+    if (thumbPoolHas(url)) continue;
+    startThumbDecodeAhead(url);
+  }
+  if (
+    thumbDecodeAheadQueue.length &&
+    thumbDecodeAheadInFlight < THUMB_DECODE_AHEAD_CONCURRENCY
+  ) {
+    scheduleThumbDecodeAhead();
+  }
+}
+
+function cancelThumbPrefetchBatch() {
+  /* 服务端收到连接断开，会把还没开工的任务丢掉，把名额让给可见区。 */
+  thumbPrefetchInFlight?.controller.abort();
+}
+
+function scheduleThumbPrefetch(delay = THUMB_PREFETCH_TICK_MS) {
+  clearTimeout(thumbPrefetchTimer);
+  thumbPrefetchTimer = setTimeout(() => {
+    thumbPrefetchTimer = 0;
+    void runThumbPrefetchTick();
+  }, delay);
+}
+
+/* 视野挪了以后重新瞄准：小挪动接着按原计划补，大跳动直接换一批目标。 */
+function retargetThumbPrefetch() {
+  const size = galleryThumbSizeForZoom();
+  const key = thumbPrefetchViewKeyFor(size);
+  if (!key) return;
+  const range = galleryViewportIndexRange();
+  if (!range) return;
+  const moved =
+    thumbPrefetchAnchor < 0
+      ? Number.POSITIVE_INFINITY
+      : Math.abs(range.first - thumbPrefetchAnchor);
+  if (moved >= THUMB_PREFETCH_JUMP_MIN) {
+    cancelThumbPrefetchBatch();
+    thumbPrefetchSettleUntil = Date.now() + THUMB_PREFETCH_SETTLE_MS;
+  }
+  if (
+    key !== thumbPrefetchViewKey ||
+    size !== thumbPrefetchSize ||
+    moved >= THUMB_PREFETCH_REANCHOR_MIN
+  ) {
+    rebuildThumbPrefetchPlan(range, size);
+  }
+}
+
+async function runThumbPrefetchTick() {
+  thumbPrefetchTimer = 0;
+  /* 滚动过程中视野一直在变：先按新位置重排计划，再决定发不发这一批。 */
+  if (thumbPrefetchScrollDirty) {
+    thumbPrefetchScrollDirty = false;
+    retargetThumbPrefetch();
+  }
+  if (!thumbPrefetchAlive()) return;
+  if (!thumbPrefetchReady()) {
+    scheduleThumbPrefetch(THUMB_PREFETCH_IDLE_MS);
+    return;
+  }
+  /* 刚大跳过（拖滚动条 / 跳到某个日期）：等视野停稳再排计划。 */
+  if (Date.now() < thumbPrefetchSettleUntil) {
+    scheduleThumbPrefetch(THUMB_PREFETCH_SETTLE_MS);
+    return;
+  }
+  if (!thumbPrefetchPlan.length && thumbPrefetchAnchor < 0) {
+    /* 之前量不到可见区，现在补量一次。 */
+    const range = galleryViewportIndexRange();
+    if (range) rebuildThumbPrefetchPlan(range, galleryThumbSizeForZoom());
+  }
+  const batch = nextThumbPrefetchBatch();
+  if (!batch.ids.length) {
+    /* 这一带都补齐了：慢速巡检，等新照片进来或者用户继续往下滚。 */
+    scheduleThumbPrefetch(THUMB_PREFETCH_IDLE_MS);
+    return;
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    THUMB_PREFETCH_TIMEOUT_MS,
+  );
+  const flight = { controller };
+  thumbPrefetchInFlight = flight;
+  try {
+    await api("/api/thumbs/prefetch", {
+      method: "POST",
+      body: JSON.stringify({
+        ids: batch.ids,
+        size: thumbPrefetchSize,
+        fit: "inside",
+      }),
+      signal: controller.signal,
+    });
+    /* 服务端回了就说明这一批没被取消：生成好的、以及确定做不出来的，
+       都算处理过，不再重复提交。 */
+    rememberThumbPrefetchWarmed(batch.keys);
+    /* 落盘的这一批接着排进提前解码，用户滑到之前就把位图备好。 */
+    queueThumbDecodeAhead(batch.items, thumbPrefetchSize);
+  } catch {
+    /* 取消 / 超时 / 服务重启都静默：重排计划时会再试一遍。 */
+  } finally {
+    clearTimeout(timeout);
+    if (thumbPrefetchInFlight === flight) thumbPrefetchInFlight = null;
+  }
+  scheduleThumbPrefetch(THUMB_PREFETCH_TICK_MS);
+}
+
+/* 滚动时只记账，真正的重排放在下一批开工前 —— 滚动事件一帧能来几十次，
+   不该每次都重算一遍几千项的计划。 */
+function noteThumbPrefetchScroll() {
+  thumbPrefetchScrollDirty = true;
+  /* 滚动这段时间先别解码，见 pumpThumbDecodeAhead。 */
+  thumbDecodeScrollQuietUntil =
+    performance.now() + THUMB_DECODE_AHEAD_SCROLL_QUIET_MS;
+  if (!thumbPrefetchTimer && !thumbPrefetchInFlight) {
+    scheduleThumbPrefetch(THUMB_PREFETCH_TICK_MS);
+  }
+}
+
+function stopThumbPrefetch() {
+  clearTimeout(thumbPrefetchTimer);
+  thumbPrefetchTimer = 0;
+  thumbPrefetchSettleUntil = 0;
+  cancelThumbPrefetchBatch();
+  thumbPrefetchScrollDirty = false;
+  stopThumbDecodeAhead();
+  resetThumbPrefetchPlan(thumbPrefetchSize);
+  thumbPrefetchViewKey = "";
+}
+
+/* 视图落定后启动预生成：导入完成、切图库 / 相簿、换网格档位都走这里。 */
+function armThumbPrefetch({ force = false } = {}) {
+  if (!thumbPrefetchAlive()) return;
+  const size = galleryThumbSizeForZoom();
+  const key = thumbPrefetchViewKeyFor(size);
+  if (force || key !== thumbPrefetchViewKey || thumbPrefetchAnchor < 0) {
+    /* 切图库 / 切相簿 / 换档位：在途那一批是上一个视图的，掐掉让路。 */
+    if (key !== thumbPrefetchViewKey) cancelThumbPrefetchBatch();
+    const range = galleryViewportIndexRange();
+    if (range) rebuildThumbPrefetchPlan(range, size);
+    else resetThumbPrefetchPlan(size);
+  }
+  if (!thumbPrefetchTimer) scheduleThumbPrefetch(THUMB_PREFETCH_TICK_MS);
+}
+
+/* 窗口切到后台就停下：没人看着，不必占 CPU；切回来从当前视野重新排。 */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearTimeout(thumbPrefetchTimer);
+    thumbPrefetchTimer = 0;
+    cancelThumbPrefetchBatch();
+    stopThumbDecodeAhead();
+    /* 没人看的时候把离屏解码池收到四分之一，内存先还给系统；
+       回到前台边滚边重新攒起来，攒的过程用户是感觉不到的。 */
+    thumbTrimDecodePool(Math.floor(THUMB_DECODE_POOL_BUDGET / 4));
+    return;
+  }
+  armThumbPrefetch({ force: true });
+});
+
 function galleryQualitySrc(item, level = state.photoZoom) {
   if (!item || level < GALLERY_HIGH_RES_MIN) return "";
   return itemThumbUrl(item, GALLERY_HIGH_RES_SIZE, "inside");
@@ -24406,12 +25306,16 @@ function loadGalleryDetailedImage(tile) {
 
 function setGalleryImageQuality(grid, level = state.photoZoom) {
   const grids = Array.isArray(grid) ? grid : grid ? [grid] : photoLayoutGrids();
+  /* 换档位 = 换一档缩略图尺寸，离屏解码池里全是旧尺寸的 URL，先清掉。 */
+  syncThumbDecodePoolZoomSize(level);
   if (galleryFullObserver) {
     galleryFullObserver.disconnect();
     galleryFullObserver = null;
   }
   for (const target of grids) restoreGalleryImageQuality(target);
   observeGalleryImageTiles(grids);
+  /* 换网格档位 = 换一档缩略图尺寸，预生成计划要跟着重排。 */
+  armThumbPrefetch();
   if (!grids.length || level < GALLERY_HIGH_RES_MIN) {
     return;
   }
@@ -24443,6 +25347,10 @@ function applyGalleryZoomClasses(
   level,
   { syncQuality = true, syncWindow = true, refreshLabels = false } = {},
 ) {
+  /* 换档走的是这条就地改样式的路，不会重新 render：缓存键里的档位
+     必须同步改掉，否则切走时会把当前档位的网格存成「标准档」，
+     切回来复用出旧档位。 */
+  rebaseRenderedContentViewZoom(level);
   const grids = grid ? [grid] : photoLayoutGrids();
   if (!grids.length) return;
   for (const target of grids) {
@@ -24916,6 +25824,8 @@ function handleGalleryWheel(e) {
 
   e.preventDefault();
   e.stopPropagation();
+  const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;
+  const pinch = galleryWheelIsPinch(e);
   /* 浏览器可能把一次机械滚轮拆成多个 wheel 事件。第一次换档后保持手势
      锁定，直到滚轮真正停下；一次滚动手势永远只换一档。 */
   if (galleryWheelLocked) {
@@ -24925,9 +25835,15 @@ function handleGalleryWheel(e) {
       galleryWheelUnlockTimer = 0;
       galleryWheelAccum = 0;
     }, GALLERY_WHEEL_GESTURE_IDLE_MS);
+    /* 捏合是连续手势：累计位移够了就接着换下一档，不必松手再捏一次。 */
+    if (!pinch) return;
+    galleryWheelAccum += e.deltaY * unit;
+    if (Math.abs(galleryWheelAccum) < GALLERY_WHEEL_PINCH_REPEAT_PX) return;
+    const pinchDir = galleryWheelAccum < 0 ? 1 : -1;
+    galleryWheelAccum = 0;
+    requestGalleryZoom(pinchDir, galleryZoomFocusFromEvent(e));
     return;
   }
-  const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;
   galleryWheelAccum += e.deltaY * unit;
   clearTimeout(galleryWheelTimer);
   galleryWheelTimer = setTimeout(() => {
@@ -30360,6 +31276,8 @@ async function pickFolder() {
     applyState(finalState);
     resetPhotoWallLibraryState();
     invalidateLocationItems();
+    /* 换了图库，档位回到标准档：下一次浏览从默认大小开始。 */
+    resetGalleryZoomForViewChange();
     state.activeId = "library";
     await loadLibrary();
     rememberActiveView();
@@ -30428,6 +31346,7 @@ async function switchRoot(rootId) {
     applyState(res.state);
     resetPhotoWallLibraryState();
     invalidateLocationItems();
+    resetGalleryZoomForViewChange();
     state.activeId = "library";
     state.album = null;
     state.items = [];
@@ -30654,6 +31573,7 @@ async function removeRoot(rootId, { confirmRemoval = true } = {}) {
     applyState(res.state);
     invalidateLocationItems();
     if (!state.roots.length) {
+      resetGalleryZoomForViewChange();
       state.activeId = "library";
       state.album = null;
       state.items = [];
@@ -30674,6 +31594,7 @@ async function removeRoot(rootId, { confirmRemoval = true } = {}) {
       state.select = false;
       rememberActiveView();
     } else if (removedActive) {
+      resetGalleryZoomForViewChange();
       state.activeId = "library";
       state.album = null;
       state.items = [];
@@ -31977,7 +32898,14 @@ function clearPinnedHover() {
   }
 }
 
+/* 退出飞行（照片缩回自己格子）的实时状态，null 表示当前没有飞行层。
+   声明放在这里，是为了让 clearViewerSourceTile 能在它前面就判断飞行中。 */
+let viewerReturnFlight = null;
+
 function clearViewerSourceTile() {
+  /* 飞行途中原格子必须一直藏着，交给 syncViewerReturnSourceTile 逐帧维护。
+     查看器 220ms 隐藏定时器也会调到这里，照单执行会闪出一帧「双图」。 */
+  if (viewerReturnFlight) return;
   document
     .querySelectorAll(".photo-grid .tile.is-viewer-source")
     .forEach((tile) => tile.classList.remove("is-viewer-source"));
@@ -33423,6 +34351,7 @@ function cancelViewerClose() {
     clearTimeout(viewerCloseTimer);
     viewerCloseTimer = null;
   }
+  cancelViewerReturnFlight();
   const viewer = $("#viewer");
   if (!viewer.hidden) document.body.classList.add("viewer-open");
   viewer.classList.remove("is-closing", "is-video-closing");
@@ -33742,6 +34671,9 @@ function openViewer(index, options = {}) {
     viewer.appendChild(clone);
     const morphFull = clone.querySelector(".morph-full");
     void clone.offsetWidth;
+    /* 首帧就要守规矩：过渡层一挂上先按内容区裁好，不给滚出内容区的
+       格子留一帧骑上工具栏 / 标题栏的空档。 */
+    applyViewerOpenClip(clone, clone.getBoundingClientRect(), 0);
     placeMorphClone(clone, targetRect);
     clone.style.borderRadius = "0px";
     /* CSS 过渡和 setTimeout 是两个独立的时钟：过渡实际会在样式提交后的下一帧
@@ -33753,6 +34685,9 @@ function openViewer(index, options = {}) {
     const started = performance.now();
     const reveal = () => {
       if (viewerMorphClone !== clone) return;
+      /* 交接这一刻起画面交给舞台里的原图，它本来就被查看器裁着；
+         过渡层若还挂着进场裁切，撤层时会看见上沿跳一下。 */
+      clone.style.clipPath = "";
       stage.classList.remove("is-morphing");
       /* 先让真正的原图在同一位置画出来，两帧后再撤掉过渡层。
          这时两层尺寸已经完全一致，直接交接不会有残影；再做透明度淡出
@@ -33789,7 +34724,9 @@ function openViewer(index, options = {}) {
           syncedToImage = true;
         }
       }
-      const settled = morphRectMatches(clone.getBoundingClientRect(), goal);
+      const painted = clone.getBoundingClientRect();
+      applyViewerOpenClip(clone, painted, performance.now() - started);
+      const settled = morphRectMatches(painted, goal);
       stableFrames = settled ? stableFrames + 1 : 0;
       if (
         (ready && fullReady && stableFrames >= 2) ||
@@ -34772,6 +35709,8 @@ function startVideoFlight(item, tile, startRect, thumbSrc) {
   viewerMorphClone = clone;
   viewer.appendChild(clone);
   void clone.offsetWidth;
+  /* 与照片进场同一条规矩：封面层挂上就先裁好，再启动放大。 */
+  applyViewerOpenClip(clone, clone.getBoundingClientRect(), 0);
   /* 先让「还在缩略图原位」的这一帧真正画出来，下一帧再启动放大。
      否则首帧偶尔会已经落在半路上，看起来像从卡片直接跳到了大图。 */
   requestAnimationFrame(() => {
@@ -34806,6 +35745,8 @@ function startVideoFlight(item, tile, startRect, thumbSrc) {
 
   const reveal = () => {
     if (viewerMorphClone !== clone) return;
+    /* 交接后画面交给舞台里的 <video>，过渡层不该再带着裁切撤场。 */
+    clone.style.clipPath = "";
     stage.classList.remove("is-morphing");
     video.classList.remove("is-video-waiting");
     /* 视频先在仍然不透明的封面下面露出来；确认画上一帧后，
@@ -34840,7 +35781,9 @@ function startVideoFlight(item, tile, startRect, thumbSrc) {
         synced = true;
       }
     }
-    const settled = morphRectMatches(clone.getBoundingClientRect(), goal);
+    const painted = clone.getBoundingClientRect();
+    applyViewerOpenClip(clone, painted, performance.now() - started);
+    const settled = morphRectMatches(painted, goal);
     stableFrames = settled ? stableFrames + 1 : 0;
     const elapsed = performance.now() - started;
     /* 不能只等“第一帧画出来”：第 0 帧常常是黑的。等播放推进过开场，
@@ -35136,6 +36079,399 @@ function showViewerAt(index) {
   if (state.filmstrip) syncFilmstripView();
 }
 
+/* ------------------ 退出飞行：照片一路跟着自己的格子 ------------------
+   缩回动画的终点，是点关闭那一刻量到的格子位置。可飞行途中图库照样能滚
+   （前 220ms 查看器还盖在上面，由它把滚轮转发下去；之后交还原生滚动），
+   格子一移动，飞行层就会落在早已不存在的旧位置上。
+
+   这里不去重设过渡终点：left/top 的过渡一旦改终点就会按整段 0.4s 重新
+   计时，每帧改一次就永远追不上滚动。改成保留原有缓动不动，另加一层不参与
+   过渡的 transform 补偿格子的实时位移——补偿是逐帧精确的，滚多快都跟得住，
+   缓动曲线和落位手感也一点没变。 */
+const VIEWER_RETURN_SETTLE_FRAMES = 2;
+/* 落位后飞行层还要淡出约 150ms。这段时间继续跟着格子平移，
+   否则残影会钉在旧位置，滚动时看起来像拖了一条尾巴。 */
+const VIEWER_RETURN_LINGER_MS = 170;
+/* 追不上时的兜底：超过这个时长就不再等缓动，直接按当前状态收尾。 */
+const VIEWER_RETURN_DEADLINE_MS = 900;
+
+/* 查看器淡出的 220ms 里它仍铺满窗口、会吃掉滚轮。
+   正在关闭时不再拦，图库那套滚轮平滑照常工作。 */
+function viewerBlocksGalleryWheel() {
+  const viewer = $("#viewer");
+  return !!viewer && !viewer.hidden && !viewer.classList.contains("is-closing");
+}
+
+/* 格子被虚拟列表回收时，仍能按布局盒算出它此刻该在屏幕的哪个位置。 */
+function viewerReturnLayoutRect(index) {
+  try {
+    const found = virtualPhotoLayoutForIndex(index);
+    if (!found) return null;
+    const gridRect = found.grid.getBoundingClientRect();
+    return {
+      left: gridRect.left + found.box.x,
+      top: gridRect.top + found.box.y,
+      width: found.box.width,
+      height: found.box.height,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* 目标认 itemId，不认下标：飞行途中列表若被重新排序，同一张照片的下标会变，
+   认 id 才能一直跟着它自己那一格。 */
+function createViewerReturnTarget(item, index) {
+  const itemId = item?.id == null ? null : Number(item.id);
+  const fallbackIndex = Number(index);
+  /* 大图库有几万项，逐帧全表找下标太贵；先信上一次的下标，
+     只有那张照片真的换了位置（列表重排）才重新扫一遍。 */
+  let cachedIndex = fallbackIndex;
+  const target = {
+    itemId,
+    /* 最近一次量到的格子节点，同一帧里其它步骤直接复用，省一次 DOM 查询。 */
+    node: null,
+    index() {
+      if (itemId == null) return fallbackIndex;
+      if (Number(state.items[cachedIndex]?.id) === itemId) return cachedIndex;
+      const found = state.items.findIndex((it) => Number(it?.id) === itemId);
+      cachedIndex = found >= 0 ? found : fallbackIndex;
+      return cachedIndex;
+    },
+    tile() {
+      const node = document.querySelector(
+        `.photo-grid .tile[data-index="${target.index()}"]`,
+      );
+      target.node = node;
+      return node;
+    },
+    /* 优先量真实格子（等比布局下要量内层 img 才算得准）；
+       量不到再退回布局盒。全程只读，不会顺手把格子造出来。 */
+    resolve() {
+      const node = target.tile();
+      if (node) {
+        const rect = tileMorphRect(node);
+        if (rect && rect.width > 0 && rect.height > 0) return rect;
+      }
+      return viewerReturnLayoutRect(target.index());
+    },
+  };
+  return target;
+}
+
+/* 飞行途中虚拟列表会回收并重建格子，重建出来的那张不带 is-viewer-source，
+   于是会在飞行层下面提前露出来，变成两张图。每帧把它补回去。 */
+function syncViewerReturnSourceTile(target) {
+  const tile = target?.node || target?.tile?.();
+  if (!tile || tile.classList.contains("is-viewer-source")) return;
+  document
+    .querySelectorAll(".photo-grid .tile.is-viewer-source")
+    .forEach((other) => other.classList.remove("is-viewer-source"));
+  tile.classList.add("is-viewer-source");
+}
+
+function applyViewerReturnOffset(flight, rect, { resize = true } = {}) {
+  const base = flight.base;
+  const layer = flight.layer;
+  if (!base || !rect) return;
+  const dx = rect.left - base.left;
+  const dy = rect.top - base.top;
+  if (resize) {
+    const scaleW = base.width > 0 ? rect.width / base.width : 1;
+    const scaleH = base.height > 0 ? rect.height / base.height : 1;
+    /* 尺寸变了（切布局、窗口缩放）没法用位移补偿，
+       只能重设一次终点，让原有缓动自己追过去。 */
+    if (Math.abs(scaleW - 1) > 0.01 || Math.abs(scaleH - 1) > 0.01) {
+      flight.base = rect;
+      layer.style.transform = "";
+      flight.place(layer, rect);
+      return;
+    }
+  }
+  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+    if (layer.style.transform) layer.style.transform = "";
+    return;
+  }
+  layer.style.transform = `translate3d(${dx.toFixed(2)}px, ${dy.toFixed(2)}px, 0)`;
+}
+
+/* 飞回的照片要和图库格子守同一条规矩：只在内容区里露脸。
+   飞行层挂在 body 上、position: fixed，逃出了 .main 的 overflow 裁切，
+   目标格子一旦被滚到内容区外，照片就会骑在工具栏 / 标题栏上面，
+   看起来像飞出窗口。这里按 #content 的可见范围逐帧裁切：格子从工具栏
+   下面滑出去消失，照片也跟着从同一条边滑出去被盖住。
+   开场交接的 220ms 里查看器还铺满窗口，大图本来就可能压到内容区上沿，
+   那一段不裁；交接完成、或目标格子已经出界时才开始裁。 */
+const VIEWER_RETURN_CLIP_AFTER_MS = 220;
+
+function viewerReturnClipInset(flight, painted, targetRect, elapsed) {
+  const content = $("#content");
+  if (!content) return "";
+  const box = content.getBoundingClientRect();
+  const targetOut =
+    !targetRect ||
+    targetRect.top < box.top - 1 ||
+    targetRect.bottom > box.bottom + 1 ||
+    targetRect.left < box.left - 1 ||
+    targetRect.right > box.right + 1;
+  if (!flight.clipped && !targetOut && elapsed < VIEWER_RETURN_CLIP_AFTER_MS)
+    return "";
+  flight.clipped = true;
+  /* inset 相对元素自身边框盒、并跟随它的 transform 一起变换，
+     所以直接用含补偿的实际位置往回量四边即可。 */
+  const top = Math.max(0, box.top - painted.top);
+  const right = Math.max(0, painted.right - box.right);
+  const bottom = Math.max(0, painted.bottom - box.bottom);
+  const left = Math.max(0, box.left - painted.left);
+  if (top < 0.5 && right < 0.5 && bottom < 0.5 && left < 0.5) return "";
+  return `inset(${top.toFixed(1)}px ${right.toFixed(1)}px ${bottom.toFixed(1)}px ${left.toFixed(1)}px)`;
+}
+
+function applyViewerReturnClip(flight, painted, targetRect, elapsed) {
+  const clip = viewerReturnClipInset(flight, painted, targetRect, elapsed);
+  if (flight.layer.style.clipPath !== clip) flight.layer.style.clipPath = clip;
+}
+
+/* 点开照片的进场和飞回守同一条规矩，只是方向相反：开场那 200ms 磨砂
+   还没铺满，工具栏 / 标题栏仍露在外面，而过渡层是 position: fixed，
+   不吃 .viewer 的 overflow 裁切——被滚到内容区外的格子会带着照片
+   直接骑上标题栏。这里把可见范围从 #content 逐帧插值到 #viewer：
+   磨砂淡入期间裁切边跟着一起退到查看器自己的边框，之后照片铺满舞台
+   也不会越过窗口控制带；边界是连续移动的，交接不会跳一下。 */
+const VIEWER_OPEN_CLIP_HANDOFF_MS = 200;
+
+function viewerOpenClipInset(painted, elapsed) {
+  const viewer = $("#viewer");
+  if (!viewer) return "";
+  const v = viewer.getBoundingClientRect();
+  const box = { top: v.top, right: v.right, bottom: v.bottom, left: v.left };
+  const c = $("#content")?.getBoundingClientRect();
+  /* 内容区不在或没尺寸（地图、照片墙之类）时只守查看器边框。 */
+  if (c && c.width > 1 && c.height > 1) {
+    const raw = elapsed / VIEWER_OPEN_CLIP_HANDOFF_MS;
+    const t = raw <= 0 ? 0 : raw >= 1 ? 1 : raw;
+    /* 前慢后快：磨砂还半透明时裁切边尽量贴着内容区，等磨砂盖住
+       图库，边界也正好退到查看器边框，两者同一节奏到位。 */
+    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    box.top = c.top + (v.top - c.top) * e;
+    box.right = c.right + (v.right - c.right) * e;
+    box.bottom = c.bottom + (v.bottom - c.bottom) * e;
+    box.left = c.left + (v.left - c.left) * e;
+  }
+  const top = Math.max(0, box.top - painted.top);
+  const right = Math.max(0, painted.right - box.right);
+  const bottom = Math.max(0, painted.bottom - box.bottom);
+  const left = Math.max(0, box.left - painted.left);
+  if (top < 0.5 && right < 0.5 && bottom < 0.5 && left < 0.5) return "";
+  return `inset(${top.toFixed(1)}px ${right.toFixed(1)}px ${bottom.toFixed(1)}px ${left.toFixed(1)}px)`;
+}
+
+function applyViewerOpenClip(layer, painted, elapsed) {
+  const clip = viewerOpenClipInset(painted, elapsed);
+  if (layer.style.clipPath !== clip) layer.style.clipPath = clip;
+}
+
+function cancelViewerReturnFlight() {
+  const flight = viewerReturnFlight;
+  if (!flight) return;
+  flight.done = true;
+  flight.notified = true;
+  if (flight.frame) cancelAnimationFrame(flight.frame);
+  if (flight.failsafe) clearTimeout(flight.failsafe);
+  flight.frame = 0;
+  flight.failsafe = 0;
+  flight.layer.style.transform = "";
+  viewerReturnFlight = null;
+  releaseViewerReturnSourceHold();
+}
+
+/* 解除「原格子先藏着」的状态。飞行途中 clearViewerSourceTile 会被跳过，
+   所以这里临时把飞行状态摘下来再清，清完立刻放回去。 */
+function releaseViewerReturnSourceHold() {
+  const active = viewerReturnFlight;
+  viewerReturnFlight = null;
+  document.body.classList.remove("viewer-returning");
+  clearViewerSourceTile();
+  viewerReturnFlight = active;
+}
+
+function finishViewerReturnFlight(flight, arrived) {
+  if (!flight || flight.done) return;
+  flight.done = true;
+  if (flight.frame) cancelAnimationFrame(flight.frame);
+  if (flight.failsafe) clearTimeout(flight.failsafe);
+  flight.frame = 0;
+  flight.failsafe = 0;
+  /* 先把原格子还回来，再通知调用方收尾：两者在同一帧交换，
+     不会出现飞行层已经淡出、格子还没露面的空档。 */
+  releaseViewerReturnSourceHold();
+  if (viewerReturnFlight === flight) viewerReturnFlight = null;
+  if (flight.notified) return;
+  flight.notified = true;
+  flight.onFinish?.(arrived, flight.rect, flight.target?.tile?.() || null);
+}
+
+function tickViewerReturnFlight(flight) {
+  flight.frame = 0;
+  if (flight.done) return;
+  if (!flight.layer.isConnected) {
+    finishViewerReturnFlight(flight, false);
+    return;
+  }
+  const now = performance.now();
+  const next = () => {
+    flight.frame = requestAnimationFrame(() => tickViewerReturnFlight(flight));
+  };
+  if (flight.lingerUntil) {
+    /* 已经在淡出：只跟着格子平移，不再判定落位。 */
+    const rect = flight.target?.resolve?.() || null;
+    if (rect) {
+      flight.rect = rect;
+      applyViewerReturnOffset(flight, rect, { resize: false });
+      applyViewerReturnClip(
+        flight,
+        flight.layer.getBoundingClientRect(),
+        rect,
+        now - flight.startedAt,
+      );
+    }
+    if (now >= flight.lingerUntil) finishViewerReturnFlight(flight, true);
+    else next();
+    return;
+  }
+  const rect = flight.target?.resolve?.() || null;
+  if (!rect) {
+    /* 照片已经从列表里消失（删除、换相簿），没有可落的位置：就地淡出。 */
+    finishViewerReturnFlight(flight, false);
+    return;
+  }
+  flight.rect = rect;
+  syncViewerReturnSourceTile(flight.target);
+  applyViewerReturnOffset(flight, rect);
+  flight.onFrame?.(now - flight.startedAt, rect);
+  /* getBoundingClientRect 含 transform，所以这里比的就是「补偿后的实际位置」
+     和「格子此刻的位置」，滚动中也能判定是否已经追上。 */
+  const painted = flight.layer.getBoundingClientRect();
+  applyViewerReturnClip(flight, painted, rect, now - flight.startedAt);
+  const aligned = morphRectMatches(painted, rect);
+  const settled = aligned && (!flight.extraSettled || flight.extraSettled());
+  flight.stableFrames = settled ? flight.stableFrames + 1 : 0;
+  if (flight.stableFrames >= VIEWER_RETURN_SETTLE_FRAMES) {
+    if (flight.lingerMs > 0) {
+      flight.lingerUntil = now + flight.lingerMs;
+      flight.stableFrames = 0;
+      flight.notified = true;
+      releaseViewerReturnSourceHold();
+      flight.onFinish?.(true, rect, flight.target?.tile?.() || null);
+      next();
+      return;
+    }
+    finishViewerReturnFlight(flight, true);
+    return;
+  }
+  if (now - flight.startedAt > flight.deadlineMs) {
+    finishViewerReturnFlight(flight, false);
+    return;
+  }
+  next();
+}
+
+function beginViewerReturnFlight({
+  layer,
+  target,
+  place = placeMorphClone,
+  prepare = null,
+  deadlineMs = VIEWER_RETURN_DEADLINE_MS,
+  lingerMs = 0,
+  onFrame = null,
+  extraSettled = null,
+  onFinish,
+}) {
+  cancelViewerReturnFlight();
+  const initial = target?.resolve?.() || null;
+  if (!layer || !initial) {
+    /* 连终点都找不到，飞行不成立：把「原格子先藏着」的状态一并解除，
+       否则 body 上的 viewer-returning 会一直挂着，格子再也不露面。 */
+    releaseViewerReturnSourceHold();
+    onFinish?.(false, null, null);
+    return null;
+  }
+  const flight = {
+    layer,
+    target,
+    place,
+    onFrame,
+    extraSettled,
+    onFinish,
+    base: initial,
+    rect: initial,
+    frame: 0,
+    failsafe: 0,
+    startedAt: performance.now(),
+    deadlineMs,
+    lingerMs,
+    lingerUntil: 0,
+    stableFrames: 0,
+    done: false,
+    notified: false,
+    clipped: false,
+  };
+  viewerReturnFlight = flight;
+  prepare?.(layer, initial);
+  place(layer, initial);
+  document.body.classList.add("viewer-returning");
+  flight.failsafe = setTimeout(
+    () => finishViewerReturnFlight(flight, false),
+    deadlineMs + lingerMs + 240,
+  );
+  flight.frame = requestAnimationFrame(() => tickViewerReturnFlight(flight));
+  return flight;
+}
+
+/* 关闭动画期间，滚轮仍要能翻阅图库。查看器淡出的 220ms 里它铺满窗口，
+   滚轮会打在它身上；这里在捕获阶段接住，转交图库那套滚轮平滑，
+   顺手挡掉舞台的缩放 / 翻页，免得一边滚一边切照片。 */
+$("#viewer").addEventListener(
+  "wheel",
+  (event) => {
+    if (!viewerReturnFlight) return;
+    if (event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+    if (state.photoWall || state.copyTarget || isAlbumMapView()) return;
+    const content = $("#content");
+    if (!content || !content.querySelector(".photo-grid")) return;
+    if (content.scrollHeight <= content.clientHeight + 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelAlbumGridDragScroll();
+    if (classifyAlbumWheel(event) === "trackpad") {
+      /* 触控板自带系统惯性，补齐未走完的位移后交还原生滚动。 */
+      cancelAlbumWheelScroll({ flush: true });
+      content.scrollTop += event.deltaY;
+      return;
+    }
+    if (event.shiftKey && !event.deltaX) return;
+    const unit =
+      event.deltaMode === 1
+        ? ALBUM_WHEEL_SMOOTHING.lineHeightPx
+        : event.deltaMode === 2
+          ? content.clientHeight
+          : 1;
+    const delta = event.deltaY * unit;
+    if (!Number.isFinite(delta) || Math.abs(delta) < 0.1) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      cancelAlbumWheelScroll();
+      content.scrollTop += delta;
+      return;
+    }
+    albumWheelScroll.pending += delta;
+    if (!albumWheelScroll.frame) {
+      albumWheelScroll.lastTime = null;
+      albumWheelScroll.frame = requestAnimationFrame(stepAlbumWheelScroll);
+    }
+  },
+  { passive: false, capture: true },
+);
+
 function closeViewerWithBackgroundAnimation() {
   closeViewer();
 }
@@ -35193,6 +36529,9 @@ function closeViewer({ immediate = false } = {}) {
   const activeMorph = viewerMorphClone;
   const morphImage = activeMorph?.querySelector("img");
   const targetRect = tileMorphRect(tile);
+  /* 终点不再钉死在这一个矩形上：整个飞行过程都按 itemId 实时重算，
+     滚动把格子推到哪儿，照片就跟着落到哪儿。 */
+  const returnTarget = createViewerReturnTarget(lastItem, viewerIndex);
   /* 原图还没解码完时，用占位缩略图完成缩回飞行，关闭不退化成硬切。 */
   const posterImage = $("#viewerPhoto .viewer-photo-poster");
   const visualImage =
@@ -35273,7 +36612,6 @@ function closeViewer({ immediate = false } = {}) {
       finishViewerCloseHover(tile, lastItem.id);
       viewerCloseClone = stateClose.wrapper;
       const started = performance.now();
-      let stableFrames = 0;
       let targetRevealed = false;
       const beginClose = () => {
         if (viewerCloseClone !== stateClose.wrapper) return;
@@ -35283,9 +36621,30 @@ function closeViewer({ immediate = false } = {}) {
         resetViewerZoom();
         requestAnimationFrame(() => {
           if (viewerCloseClone !== stateClose.wrapper) return;
-          placeMorphClone(stateClose.wrapper, stateClose.targetRect);
-          stateClose.wrapper.style.borderRadius = "4px";
-          stateClose.photo.style.transform = "none";
+          beginViewerReturnFlight({
+            layer: stateClose.wrapper,
+            target: returnTarget,
+            deadlineMs: 1000,
+            prepare: () => {
+              stateClose.wrapper.style.borderRadius = "4px";
+              stateClose.photo.style.transform = "none";
+            },
+            onFrame: () => {
+              if (!targetRevealed && performance.now() - started >= 220) {
+                targetRevealed = true;
+                stateClose.targetImage.style.opacity = "1";
+              }
+            },
+            /* 外层缩回格子的同时，内层还要把旋转 / 缩放 / 平移归零，
+               两件事都走完才算落位。 */
+            extraSettled: () => {
+              const transform = getComputedStyle(stateClose.photo).transform;
+              return (
+                transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)"
+              );
+            },
+            onFinish: finishStateClose,
+          });
         });
       };
       const finishStateClose = () => {
@@ -35304,34 +36663,10 @@ function closeViewer({ immediate = false } = {}) {
         viewer.style.removeProperty("--video-close-fade");
         refreshFavoritesAfterViewer();
       };
-      const tickStateClose = () => {
-        if (viewerCloseClone !== stateClose.wrapper) return;
-        const settled = morphRectMatches(
-          stateClose.wrapper.getBoundingClientRect(),
-          stateClose.targetRect,
-        );
-        stableFrames = settled ? stableFrames + 1 : 0;
-        if (!targetRevealed && performance.now() - started >= 220) {
-          targetRevealed = true;
-          stateClose.targetImage.style.opacity = "1";
-        }
-        const transform = getComputedStyle(stateClose.photo).transform;
-        const transformDone =
-          transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
-        if (
-          (stableFrames >= 2 && transformDone) ||
-          performance.now() - started > 1000
-        ) {
-          finishStateClose();
-          return;
-        }
-        requestAnimationFrame(tickStateClose);
-      };
       viewerCloseTimer = setTimeout(finishStateClose, 1400);
       const startWhenPainted = () => {
         if (!stateClose.snapshot.isConnected) return;
         beginClose();
-        requestAnimationFrame(tickStateClose);
       };
       if (stateClose.snapshot.complete && stateClose.snapshot.naturalWidth) {
         requestAnimationFrame(startWhenPainted);
@@ -35377,10 +36712,6 @@ function closeViewer({ immediate = false } = {}) {
         shrinkStarted = true;
         $("#viewerStage").innerHTML = "";
         /* 当前帧快照从视频原位缩回缩略图；落位后淡出，露出真正的卡片封面。 */
-        placeMorphClone(clone, targetRect);
-        clone.style.borderRadius = "4px";
-        const started = performance.now();
-        let stableFrames = 0;
         const arrive = () => {
           clone.classList.add("is-arrived");
           setTimeout(() => {
@@ -35388,21 +36719,16 @@ function closeViewer({ immediate = false } = {}) {
             if (viewerCloseClone === clone) viewerCloseClone = null;
           }, 150);
         };
-        const tick = () => {
-          if (!clone.isConnected) return;
-          stableFrames = morphRectMatches(
-            clone.getBoundingClientRect(),
-            targetRect,
-          )
-            ? stableFrames + 1
-            : 0;
-          if (stableFrames >= 2 || performance.now() - started > 1000) {
-            arrive();
-            return;
-          }
-          requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
+        beginViewerReturnFlight({
+          layer: clone,
+          target: returnTarget,
+          deadlineMs: 1000,
+          lingerMs: VIEWER_RETURN_LINGER_MS,
+          prepare: (layer) => {
+            layer.style.borderRadius = "4px";
+          },
+          onFinish: arrive,
+        });
       };
 
       if (snapshotSrc) {
@@ -35484,14 +36810,7 @@ function closeViewer({ immediate = false } = {}) {
     syncGalleryTabStops();
     flushPendingUpdate();
     const started = performance.now();
-    let stableFrames = 0;
     let targetRevealed = false;
-    requestAnimationFrame(() => {
-      if (viewerCloseClone !== stateClose.wrapper) return;
-      placeMorphClone(stateClose.wrapper, stateClose.targetRect);
-      stateClose.wrapper.style.borderRadius = "4px";
-      stateClose.photo.style.transform = "none";
-    });
     const finishStateClose = () => {
       if (viewerCloseClone !== stateClose.wrapper) return;
       if (viewerCloseTimer) {
@@ -35508,30 +36827,32 @@ function closeViewer({ immediate = false } = {}) {
       refreshFavoritesAfterViewer();
     };
     viewerCloseTimer = setTimeout(finishStateClose, 1200);
-    const tickStateClose = () => {
+    requestAnimationFrame(() => {
       if (viewerCloseClone !== stateClose.wrapper) return;
-      const settled = morphRectMatches(
-        stateClose.wrapper.getBoundingClientRect(),
-        stateClose.targetRect,
-      );
-      stableFrames = settled ? stableFrames + 1 : 0;
-      if (!targetRevealed && performance.now() - started >= 220) {
-        targetRevealed = true;
-        stateClose.targetImage.style.opacity = "1";
-      }
-      const transform = getComputedStyle(stateClose.photo).transform;
-      const transformDone =
-        transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
-      if (
-        (stableFrames >= 2 && transformDone) ||
-        performance.now() - started > 900
-      ) {
-        finishStateClose();
-        return;
-      }
-      requestAnimationFrame(tickStateClose);
-    };
-    requestAnimationFrame(tickStateClose);
+      beginViewerReturnFlight({
+        layer: stateClose.wrapper,
+        target: returnTarget,
+        prepare: () => {
+          stateClose.wrapper.style.borderRadius = "4px";
+          stateClose.photo.style.transform = "none";
+        },
+        onFrame: () => {
+          if (!targetRevealed && performance.now() - started >= 220) {
+            targetRevealed = true;
+            stateClose.targetImage.style.opacity = "1";
+          }
+        },
+        /* 外层缩回格子的同时，内层还要把旋转 / 缩放 / 平移归零，
+           两件事都走完才算落位。 */
+        extraSettled: () => {
+          const transform = getComputedStyle(stateClose.photo).transform;
+          return (
+            transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)"
+          );
+        },
+        onFinish: finishStateClose,
+      });
+    });
     return;
   }
   if (!keepStageUntilHidden) {
@@ -35557,35 +36878,26 @@ function closeViewer({ immediate = false } = {}) {
     document.body.appendChild(clone);
     viewerCloseClone = clone;
     void clone.offsetWidth;
-    placeMorphClone(clone, targetRect);
-    clone.style.borderRadius = "4px";
     /* 和打开时一样，等它真的缩回缩略图的位置再淡出。
        否则 280ms 就开始透明时，过渡层还在半路上，最后会跳一下。 */
-    const started = performance.now();
-    let stableFrames = 0;
     const arrive = () => {
-      /* 飞行层已经和目标格子逐像素重合，这时才恢复原图；两者在同一帧交换，
-         不会在照片仍在半路时提前露出下面的缩略图。 */
-      document.body.classList.remove("viewer-returning");
-      clearViewerSourceTile();
       clone.classList.add("is-arrived");
       setTimeout(() => {
         clone.remove();
         if (viewerCloseClone === clone) viewerCloseClone = null;
       }, 150);
     };
-    const tick = () => {
-      if (!clone.isConnected) return;
-      stableFrames = morphRectMatches(clone.getBoundingClientRect(), targetRect)
-        ? stableFrames + 1
-        : 0;
-      if (stableFrames >= 2 || performance.now() - started > 900) {
-        arrive();
-        return;
-      }
-      requestAnimationFrame(tick);
-    };
-    requestAnimationFrame(tick);
+    /* 飞行层和目标格子逐像素重合的那一刻，原格子由飞行控制器在同一帧还回来，
+       不会在照片仍在半路时提前露出下面的缩略图。 */
+    beginViewerReturnFlight({
+      layer: clone,
+      target: returnTarget,
+      lingerMs: VIEWER_RETURN_LINGER_MS,
+      prepare: (layer) => {
+        layer.style.borderRadius = "4px";
+      },
+      onFinish: arrive,
+    });
   }
 }
 
@@ -39545,6 +40857,8 @@ function handleGalleryContentScroll() {
   if (galleryContentScrollFrame) return;
   galleryContentScrollFrame = requestAnimationFrame(() => {
     galleryContentScrollFrame = 0;
+    /* 先定方向再同步虚拟窗口：窗口要知道该往哪一侧多留缓冲。 */
+    noteGalleryScrollDirection();
     scheduleProgressivePhotoGridFill();
     /* 滚动事件一帧可能触发几十次。虚拟窗口在同一帧只同步一次，
        不再额外排到下一帧，也不在每个事件里重复关闭浮层。 */
@@ -39553,6 +40867,7 @@ function handleGalleryContentScroll() {
     if (contextMenuOpen) closeItemContextMenu(true);
     scheduleVisibleContextMapPreviews();
     syncBackToTop();
+    noteThumbPrefetchScroll();
   });
 }
 
@@ -39565,9 +40880,16 @@ window.addEventListener("resize", () => {
 
 /* ---------------------- 回到顶部 ---------------------- */
 /* 滚过约一屏后右下角弹簧浮现；点击用 easeInOutCubic 按距离平滑滚回顶。
-   选择模式 / 照片墙 / 查看器打开时不出现，避免和底栏 / 浮层打架。 */
+   选择模式 / 照片墙 / 查看器打开时不出现，避免和底栏 / 浮层打架。
+   导入没跑完时也不出现：底栏右下角站着「取消」，两个控件不该抢同一个位置。 */
 let backToTopFrame = 0;
 let backToTopScrollAnim = 0;
+
+/* 导入从「选好文件夹」到「完成 / 取消落定」整段都算进行中，
+   和导出互斥检查用的是同一条判断。 */
+function rootImportRunning() {
+  return Boolean(state.rootImport) || rootImportInProgress;
+}
 
 function syncBackToTop() {
   if (backToTopFrame) return;
@@ -39583,6 +40905,7 @@ function syncBackToTop() {
       $("#viewer").hidden &&
       !state.albumMapOpen &&
       state.activeId !== "locations" &&
+      !rootImportRunning() &&
       (!hideBackToTop || backToTopMouseNear);
     btn.classList.toggle("is-visible", show);
     btn.setAttribute("aria-hidden", String(!show));
@@ -40039,7 +41362,9 @@ document.addEventListener("keydown", (e) => {
       askClose(false);
     } else if (key === "Tab") {
       const focusable = [
-        ...$("#askCard").querySelectorAll("button:not(:disabled)"),
+        ...$("#askCard").querySelectorAll(
+          "button:not(:disabled):not([hidden])",
+        ),
       ];
       const first = focusable[0];
       const last = focusable[focusable.length - 1];

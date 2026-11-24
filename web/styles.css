@@ -31,8 +31,10 @@
   /* 主窗口标题栏保持紧凑：按钮尺寸同步收回，避免只压高度后显得拥挤。 */
   --window-controls-band: 0px;
   --toolbar-height: 44px;
-  /* 左右标题栏一起避开内容卡顶边的裁切区域。 */
-  --toolbar-offset-y: 6px;
+  /* 左右标题栏一起避开内容卡顶边的裁切区域。
+     这段内缩只等于上半部玻璃边：窗口控制带隐藏且关闭玻璃边框时为 0，
+     标题栏与内容才会真正贴到窗口上沿，不留残边。 */
+  --toolbar-offset-y: var(--app-frame-top);
   /* 相簿栏与项目区共用同一条标题栏高度；47px 命中区始终包住 32px 图标。 */
   --sidebar-rail-top: calc(
     var(--window-controls-band) + var(--toolbar-offset-y) - 1.5px
@@ -57,6 +59,12 @@
   --main-frame-y: 6px;
   --app-frame-top: var(--main-frame-y);
   --app-frame-bottom: var(--main-frame-y);
+  /* 底边那两条栏（选择栏、导入 / 移出图库时的状态条）统一厚度：
+     两条互换时厚度不变，浮在底边的东西也只认这一个数。 */
+  --bottom-bar-thickness: calc(38px + var(--app-frame-bottom));
+  /* 底栏下沿那条实心底要盖过内容卡裁切边往上这么多，
+     裁切边缘的抗锯齿那一行才完全落在窗框色里。 */
+  --bottom-bar-cap-overlap: 2px;
   /* 分界线悬停 / 拖动时的浅灰 */
   --resizer-line: #b8b8bd;
   /* 当前打开的那一行（相簿）用灰底标出来，不用蓝色实心 */
@@ -158,7 +166,6 @@ html[data-window-controls="windows"],
 html[data-window-controls="macos"] {
   --window-controls-band: 32px;
   --app-frame-top: 0px;
-  --toolbar-offset-y: 0px;
 }
 /* 自动模式跟随系统；浅色 / 深色由主进程切换 Chromium 的配色来源。 */
 @media (prefers-color-scheme: dark) {
@@ -1483,6 +1490,57 @@ html.trash-hover-only
   position: relative;
   /* 标题栏是浮层；内容可以滚到它下方，但任何照片都不能越过主区域上沿。 */
   overflow: hidden;
+  /* 底边此刻压着几条栏，由下面的 :has() 实时算在这里：
+     状态条要抬到选择栏上面，轻提示和「回到顶部」也要跟着让位，
+     否则它们会和底栏叠在一块儿。 */
+  --selbar-stack: 0px;
+  --status-stack: 0px;
+  --bottom-extra: 0px;
+}
+.main:has(#selbar:not(.is-collapsed)) {
+  --selbar-stack: var(--bottom-bar-thickness);
+}
+.main:has(#statusBar:not(.is-collapsed)) {
+  --status-stack: var(--bottom-bar-thickness);
+}
+/* 两条底栏同时在时多出来的那一截：轻提示原本按一条栏留的空就不够了。 */
+.main:has(#selbar:not(.is-collapsed)):has(#statusBar:not(.is-collapsed)) {
+  --bottom-extra: var(--bottom-bar-thickness);
+}
+
+/* 选择栏是贴底的全宽毛玻璃层，进出场会从内容卡裁切边上扫过；合成器算
+   裁切边缘那一行时会把底下的照片颜色漏出来，静止时像一条缝，滑动途中
+   还会跟着栏闪。压边不能画在栏里，要钉在主区域下沿、不跟栏移动，只要
+   选择栏在场（含进出场途中）就盖住裁切边再往上 --bottom-bar-cap-overlap。
+   状态条已经收成悬空的胶囊，不会碰到这条裁切边，所以不触发压边。 */
+.main::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* 压在两条底栏上面：栏从它底下滑进滑出，裁切边那一行始终是窗框色。 */
+  z-index: 13;
+  height: calc(var(--app-frame-bottom) + var(--bottom-bar-cap-overlap));
+  background: var(--window-frame-bg);
+  /* 只是补色，不接点击；栏里的按钮都在可见栏高的中间，盖不到。 */
+  pointer-events: none;
+  opacity: 0;
+  /* 收栏那一程压边要多留一会儿：等底栏完全滑出窗口再淡掉，
+     滑动途中裁切边始终有窗框色盖着。 */
+  transition: opacity 90ms linear 260ms;
+}
+.main:has(#selbar:not(.is-collapsed))::after {
+  opacity: 1;
+  /* 进场要立刻盖住，不能等淡入。 */
+  transition: none;
+}
+/* 标题透明时照片本来就该滚到内容卡下沿；关掉毛玻璃边框后内容卡铺满
+   窗口，裁切路径是整数直角。这两种情况都没有那条缝，压边反而会凭空
+   多出一条灰边。 */
+html.transparent-titlebar .main::after,
+html.hide-glass-border .main::after {
+  content: none;
 }
 /* 回到顶部：滚过约一屏后右下角弹簧浮现，点击平滑滚回顶。
    选择模式 / 照片墙 / 查看器里不出现（由 JS 控制 is-visible）。 */
@@ -1514,14 +1572,15 @@ html.trash-hover-only
 }
 .back-to-top.is-visible {
   opacity: 1;
-  transform: scale(1) translateY(0);
+  /* 状态条冒出来时它跟着抬一层，不再压在「正在导入…」上面。 */
+  transform: scale(1) translateY(calc(-1 * var(--status-stack)));
   pointer-events: auto;
 }
 .back-to-top:hover {
   background: var(--sheet-bg);
 }
 .back-to-top:active {
-  transform: scale(0.92);
+  transform: scale(0.92) translateY(calc(-1 * var(--status-stack)));
 }
 .back-to-top:focus-visible {
   outline: 2px solid var(--accent);
@@ -1534,11 +1593,11 @@ html.trash-hover-only
 @media (prefers-reduced-motion: reduce) {
   .back-to-top {
     transition: opacity 0.01ms linear;
-    transform: none;
+    transform: translateY(calc(-1 * var(--status-stack)));
   }
   .back-to-top.is-visible,
   .back-to-top:active {
-    transform: none;
+    transform: translateY(calc(-1 * var(--status-stack)));
   }
 }
 
@@ -2088,10 +2147,11 @@ html.blur-titlebar:not(.transparent-titlebar) .toolbar {
   box-shadow: none;
 }
 
-/* 隐藏窗口控件时，标题栏上缘与内容裁切线重合会留下 1px 接缝；
-   只把浮层标题栏向上压 1px，不改变内容区布局。 */
-html[data-window-controls="hidden"].blur-titlebar:not(.transparent-titlebar)
-  .toolbar {
+/* 隐藏窗口控件且仍显示玻璃边框时，标题栏上缘与内容裁切线重合会留下 1px 接缝；
+   只把浮层标题栏向上压 1px，不改变内容区布局。
+   关闭玻璃边框后顶部已无裁切线，不再需要这条补偿。 */
+/* prettier-ignore */
+html[data-window-controls="hidden"]:not(.hide-glass-border).blur-titlebar:not(.transparent-titlebar) .toolbar {
   top: calc(var(--toolbar-offset-y) - 1px);
 }
 
@@ -3400,6 +3460,13 @@ body.album-sorting .nav-item {
 
 .photo-grid {
   --photo-grid-current-gap: var(--photo-grid-gap);
+  /* 圆角和「压缝量」都跟着档位走：缩到正方形的那三档（gallery-zoom-1/2/3）
+     把间隔和圆角一起归零，照片边贴边铺成一整块，跟 iOS 相册拉到
+     「月 / 年」时一样；--gallery-seam-bleed 是格子为了盖住亚像素接缝
+     互相压住的宽度，其余两档为 0，等于不生效。
+     这两个值只作用于照片网格，设置里的「圆角 / 直角」和相簿卡片都不受影响。 */
+  --gallery-tile-radius: var(--thumbnail-radius);
+  --gallery-seam-bleed: 0px;
   display: grid;
   /* 列数跟着可用宽度自动变，列宽再把整行刚好铺满：
      相簿栏拉宽时照片会自动适配，左右两边始终留出同样的内容区边距 */
@@ -3410,21 +3477,30 @@ body.album-sorting .nav-item {
   /* 横竖两个方向用同一个值（原来写的 3.02，后来调整到 4px，
      因为格子是 184.95px 这种带小数的宽，落到像素上会有零点几的差别） */
   gap: var(--photo-grid-current-gap);
-  cursor: grab;
+  /* 整块照片区共用 .tile 那只黑色小手：照片之间的缝隙、原始比例模式下
+     照片四周的透明留白都不换形状，指针从照片滑到缝里不会跳成别的样子。
+     留白本来也能按住上下拖动，拖动期间由 is-drag-scrolling 换成抓手。 */
+  cursor: pointer;
 }
 .photo-grid.gallery-zoom-1 {
   --photo-tile-size: calc(var(--photo-tile-base) * 0.16);
-  --photo-grid-current-gap: 1px;
+  --photo-grid-current-gap: 0px;
+  --gallery-tile-radius: 0px;
+  --gallery-seam-bleed: 0.5px;
   --gallery-chrome-scale: 0.36;
 }
 .photo-grid.gallery-zoom-2 {
   --photo-tile-size: calc(var(--photo-tile-base) * 0.3);
-  --photo-grid-current-gap: 2px;
+  --photo-grid-current-gap: 0px;
+  --gallery-tile-radius: 0px;
+  --gallery-seam-bleed: 0.5px;
   --gallery-chrome-scale: 0.58;
 }
 .photo-grid.gallery-zoom-3 {
   --photo-tile-size: calc(var(--photo-tile-base) * 0.52);
-  --photo-grid-current-gap: 3px;
+  --photo-grid-current-gap: 0px;
+  --gallery-tile-radius: 0px;
+  --gallery-seam-bleed: 0.5px;
   --gallery-chrome-scale: 0.78;
 }
 .photo-grid.gallery-zoom-4 {
@@ -3483,6 +3559,13 @@ body.album-sorting .nav-item {
 body.photo-wall-mode .library-timeline-scrubber,
 body.photo-wall-library-active .library-timeline-scrubber,
 body.photo-wall-exiting .library-timeline-scrubber {
+  display: none;
+}
+
+/* 查看器与预览浮层（空格快速预览、右键信息卡、右键菜单/裁剪）期间，
+   滑块会从窗口接缝处露出边角；统一收起，退出后再交还给图库。 */
+body.viewer-open .library-timeline-scrubber,
+html.context-preview-open .library-timeline-scrubber {
   display: none;
 }
 
@@ -3833,6 +3916,10 @@ body.photo-wall-exiting #sidebarRailBtn {
 .photo-grid.with-gap {
   margin-top: 34px;
 }
+/* 时间分组跟在子相簿卡片下面时，沿用与普通网格相同的间隔。 */
+.library-timeline-groups.with-gap {
+  margin-top: 34px;
+}
 /* 入场期间只让墙面透出来，不预先铺满灰色照片格。 */
 .photo-grid.is-album-revealing .tile {
   background: transparent;
@@ -3860,7 +3947,7 @@ body.photo-wall-exiting #sidebarRailBtn {
   height: min(100%, calc(100% / var(--ar, 1)));
   /* 方形模式由 .crop 裁出同样的圆角，原始比例则由媒体自己描边。
      两边使用同一个静态半径，切换时只补间 transform，不再逐帧重绘圆角。 */
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
   transform: scale(var(--cs, 1));
   transition: transform var(--photo-layout-motion-duration)
     var(--photo-layout-motion-ease);
@@ -3881,7 +3968,7 @@ body.photo-wall-exiting #sidebarRailBtn {
   margin: auto;
   width: min(100%, calc(100% * var(--ar, 1)));
   height: min(100%, calc(100% / var(--ar, 1)));
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
   transform: scale(var(--cs, 1));
   background-color: var(--tile-empty);
   background-image: linear-gradient(
@@ -3914,6 +4001,20 @@ body.photo-wall-exiting #sidebarRailBtn {
 }
 .photo-grid .tile.is-media-ready .crop > img:not(.gallery-full-overlay) {
   opacity: 1;
+}
+/* 已经上过屏的缩略图：磁盘、HTTP 缓存、解码池全是热的，画面基本当帧就到。
+   这时候再播骨架微光和 210ms 淡入，不是在「过渡」，而是在明明白白告诉用户
+   「我又加载了一次」。所以免动画标记要把 opacity 的过渡整个拿掉 ——
+   它和 is-media-ready 是同一帧加上的，过渡时长为 0，浏览器根本不会起过渡。
+   transform 那一路必须留着：方形 / 原始比例两种裁剪模式之间全靠它做动画。 */
+.photo-grid .tile.is-thumb-warm .crop::before {
+  animation: none;
+  transition: transform var(--photo-layout-motion-duration)
+    var(--photo-layout-motion-ease);
+}
+.photo-grid .tile.is-thumb-warm .crop > img:not(.gallery-full-overlay) {
+  transition: transform var(--photo-layout-motion-duration)
+    var(--photo-layout-motion-ease);
 }
 /* 三种裁剪编辑墙不走 syncTileAspect：照片直接显示，骨架层退场。 */
 .photo-grid .tile.mosaic-wall-library-tile .crop > img,
@@ -3962,7 +4063,7 @@ body.photo-wall-exiting #sidebarRailBtn {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
 }
 /* 选中：整格内容（照片、视频暗角、时长、对勾）一起均匀缩小，反馈要快。
    幅度是原来的一半：边缘从缩 3% 改成缩 1.5%（scale 0.94 → 0.97）。
@@ -4164,18 +4265,31 @@ body.photo-wall-exiting #sidebarRailBtn {
   border-color: var(--accent);
   color: #fff;
 }
-#content.select-mode .tile {
+/* 选择模式下按住照片是「刷选」而不是打开大图，
+   所以照片和留白一起回到普通箭头，别继续暗示可点。 */
+#content.select-mode .tile,
+#content.select-mode .photo-grid {
   cursor: default;
 }
 .photo-grid .tile {
   aspect-ratio: 1 / 1;
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
   overflow: hidden;
   cursor: pointer;
   position: relative;
+  /* 无缝档的列宽是 1fr 平分出来的小数，相邻两格共用一条落在像素中间的边：
+     两边各自的抗锯齿都会把背景色混进这条边（混进去的能占到四分之一），
+     拼起来就是一条发丝细缝，格子贴得再紧也白搭。这里让每格朝右、朝下
+     多长出去半个像素，后画的格子把这条边整个盖住，接缝才真正连续。
+     只朝右和下压，整块网格的外轮廓最多往外扩 0.5px，落在内容区留白里看不出来。 */
+  margin-right: calc(-1 * var(--gallery-seam-bleed));
+  margin-bottom: calc(-1 * var(--gallery-seam-bleed));
   /* 相簿栏开合用 translate / scale 做 FLIP；只在这次动画期间提升图层。 */
   content-visibility: auto;
-  contain-intrinsic-size: auto var(--photo-tile-size);
+  /* 离屏格子按这个高度占位。无缝档要把压出去的那半像素算回来，
+     否则没渲染过的行会比渲染过的行矮半像素，滚动时高度对不上。 */
+  contain-intrinsic-size: auto
+    calc(var(--photo-tile-size) + var(--gallery-seam-bleed));
   transition:
     transform 160ms var(--ease-out),
     box-shadow 0.18s ease,
@@ -4220,6 +4334,12 @@ html.gallery-is-scrolling .photo-grid .tile {
 #content.is-drag-scrolling {
   cursor: grabbing;
   user-select: none;
+}
+
+/* 拖动过程中网格自己的 pointer 会盖掉父级的 grabbing，
+   这里补上，保证按住留白拖动时也是抓手反馈。 */
+#content.is-drag-scrolling .photo-grid {
+  cursor: grabbing;
 }
 
 #content.is-drag-scrolling .photo-grid .tile {
@@ -4359,7 +4479,7 @@ html.gallery-grid-action-locked #content.is-drag-scrolling .photo-grid .tile {
 }
 .photo-grid.photo-layout-justified .tile .crop,
 .photo-grid.photo-layout-masonry .tile .crop {
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
 }
 .photo-grid.photo-layout-justified .tile-check,
 .photo-grid.photo-layout-masonry .tile-check {
@@ -7154,19 +7274,21 @@ html.no-root-directory .empty-state.welcome {
   z-index: 6;
   display: flex;
   align-items: center;
-  gap: 14px;
-  height: 52px;
+  gap: 12px;
+  /* 与导入 / 移除图库时的状态条同高同垫边：两条底栏互换时厚度不变。 */
+  height: var(--bottom-bar-thickness);
   /* 与顶栏使用同一组窗框补偿后的可见边距，
      让移动 / 删除与上方首尾按钮落在同一条竖线上。 */
-  padding: 0 var(--sidebar-rail-visual-left) 8px var(--toolbar-visible-inset);
+  padding: 0 var(--sidebar-rail-visual-left) var(--app-frame-bottom)
+    var(--toolbar-visible-inset);
   background: var(--toolbar-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
   border-top: 1px solid var(--sep);
   color: var(--text-2);
   overflow: hidden;
-  transition:
-    transform 0.24s cubic-bezier(0.32, 0.72, 0.42, 1),
-    opacity 0.18s ease;
+  /* 展开那一程只推不淡：底栏像从窗口下缘推出来。 */
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0.42, 1);
 }
 .selbar[hidden] {
   display: none;
@@ -7175,11 +7297,15 @@ html.no-root-directory .empty-state.welcome {
   transform: translateY(100%);
   opacity: 0;
   pointer-events: none;
+  /* 淡出只留在收起这一程，避免展开时边推边闪。 */
+  transition:
+    transform 0.24s cubic-bezier(0.32, 0.72, 0.42, 1),
+    opacity 0.14s ease;
 }
 .selbar-count {
   flex: 1 1 auto;
   text-align: center;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--text);
 }
 /* 计数里的数字单独成块才能做滚入变换；等宽数字保证滚动时宽度不抖。 */
@@ -7192,11 +7318,15 @@ html.no-root-directory .empty-state.welcome {
    一件没选的时候图标是灰的、也点不动；选了照片才变黑，表示「现在能用」。
    灰 → 黑走的是 .icon-btn 自带的那 0.15 秒过渡 */
 .selbar .icon-btn {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: var(--field-bg);
   color: var(--text);
+}
+.selbar .icon-btn svg {
+  width: 16px;
+  height: 16px;
 }
 .selbar .icon-btn:hover {
   background: var(--accent-hover);
@@ -7223,12 +7353,12 @@ html.no-root-directory .empty-state.welcome {
 .selbar .selbar-pill-btn {
   display: inline-flex;
   width: auto;
-  min-width: 68px;
-  height: 32px;
-  padding: 0 12px;
-  gap: 7px;
+  min-width: 58px;
+  height: 27px;
+  padding: 0 10px;
+  gap: 6px;
   border: 1px solid var(--toolbar-control-border);
-  border-radius: 16px;
+  border-radius: 14px;
   background: var(--toolbar-control-surface);
   box-shadow: var(--toolbar-control-highlight);
 }
@@ -7247,7 +7377,7 @@ html.no-root-directory .empty-state.welcome {
 }
 .selbar-action-label {
   display: inline;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -7273,6 +7403,8 @@ html.transparent-titlebar .selbar {
   border-top-color: transparent;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+  /* 胶囊比整条底栏更贴底边：收掉原先悬在底部的空隙。 */
+  padding-bottom: 4px;
 }
 html.blur-titlebar .selbar {
   background: var(--blur-titlebar-surface);
@@ -7281,9 +7413,17 @@ html.blur-titlebar .selbar {
   backdrop-filter: var(--blur-titlebar-backdrop);
   box-shadow: inset 0 0.5px 0 color-mix(in srgb, white 24%, transparent);
 }
+/* 选择栏是浮层、不占布局，所以由内容自己让位：进入选择模式时底部多留
+   一条栏的厚度，滚到最后一行照片才不会被压在栏底下。
+   padding-bottom 不在 .content 的过渡里，进出选择都是一次到位、不闪。 */
+#content.select-mode {
+  padding-bottom: calc(
+    var(--content-visible-gutter) + var(--bottom-bar-thickness)
+  );
+}
 html.transparent-titlebar #content.select-mode,
 html.blur-titlebar #content.select-mode {
-  padding-bottom: 112px;
+  padding-bottom: 96px;
 }
 html.transparent-titlebar .selbar .selbar-pill-btn {
   background: color-mix(in srgb, var(--main-bg) 28%, transparent);
@@ -7312,7 +7452,7 @@ html.transparent-titlebar .selbar-count,
 html.blur-titlebar .selbar-count {
   flex: 0 1 auto;
   margin: 0 auto;
-  padding: 6px 13px;
+  padding: 4px 11px;
   border-radius: 999px;
   box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 8%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(130%);
@@ -7328,8 +7468,8 @@ html.blur-titlebar .selbar-count {
 /* 编号完成键与已选数量使用同一层胶囊材质，避免底栏出现两种底色。 */
 .selbar #numberingDoneBtn {
   flex: 0 0 auto;
-  height: 32px;
-  padding: 0 13px;
+  height: 27px;
+  padding: 0 11px;
   border-radius: 999px;
   background: var(--toolbar-control-surface);
   box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent);
@@ -7368,11 +7508,11 @@ html.blur-titlebar .picker-sheet {
 .selbar-act {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 8px;
+  gap: 5px;
+  height: 27px;
+  padding: 0 7px;
   border-radius: 10px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   transition:
@@ -7383,8 +7523,8 @@ html.blur-titlebar .picker-sheet {
   display: none;
 }
 .selbar-act svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex: 0 0 auto;
 }
 .selbar-act.danger {
@@ -8384,6 +8524,10 @@ html.metadata-location-open .sidebar-resizer {
   line-height: 1.48;
   color: var(--text-2);
   overflow-wrap: anywhere;
+  /* 详细文案（例如「清除所有数据」）用换行分条，靠排版读得下去；
+     pretty 让折行尽量均衡，末行不吊单字（旧内核不支持时自动忽略）。 */
+  white-space: pre-line;
+  text-wrap: pretty;
 }
 
 .ask-note {
@@ -8391,12 +8535,38 @@ html.metadata-location-open .sidebar-resizer {
   font-size: 12.5px;
   line-height: 1.42;
   color: var(--text-3);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  text-wrap: pretty;
 }
 
 .ask-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   border-top: 1px solid var(--dialog-sep);
+}
+
+/* 告知模式：只剩一个动作，占满整行，颜色回到中性（不是危险操作）。 */
+.ask-card.is-alert .ask-actions {
+  grid-template-columns: 1fr;
+}
+/* 告知模式只有一段短文案，两行时把行宽拉匀，末行不剩几个字 */
+.ask-card.is-alert .ask-msg {
+  text-wrap: balance;
+}
+.ask-card.is-alert .ask-action + .ask-action {
+  border-left: 0;
+}
+.ask-card.is-alert .ask-confirm {
+  color: var(--text-2);
+}
+.ask-card.is-alert .ask-confirm:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.ask-card.is-alert .ask-confirm:active {
+  background: var(--select);
+  color: var(--text);
 }
 
 .ask-action {
@@ -11196,7 +11366,7 @@ html.transparent-titlebar #content.location-grid-view {
   display: block;
   overflow: hidden;
   margin: 0;
-  border-radius: var(--thumbnail-radius);
+  border-radius: var(--gallery-tile-radius);
   contain: layout paint style;
   pointer-events: none;
   transform-origin: 50% 50%;
@@ -11440,7 +11610,8 @@ html[data-color-mode="dark"] .album-menu-separator {
 .toast {
   position: absolute;
   left: 50%;
-  bottom: 84px;
+  /* 84px 是按「底边最多一条栏」留的空；两条栏叠着时再多让一条的厚度。 */
+  bottom: calc(84px + var(--bottom-extra));
   transform: translateX(-50%);
   z-index: 30;
   padding: 9px 18px;
@@ -11453,6 +11624,7 @@ html[data-color-mode="dark"] .album-menu-separator {
   white-space: normal;
   text-align: center;
   pointer-events: none;
+  transition: bottom 180ms var(--ease-out);
 }
 .toast .toast-text {
   display: inline-block;
@@ -11462,42 +11634,69 @@ html[data-color-mode="dark"] .album-menu-separator {
 }
 
 .status-bar {
+  --status-bar-lift: 0px;
+  --status-bar-hide: 12px;
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 0;
+  bottom: 12px;
+  width: fit-content;
+  max-width: calc(100% - 48px);
+  margin-inline: auto;
   z-index: 12;
   display: flex;
   align-items: center;
   gap: 9px;
-  /* 元素底部还延伸进玻璃边，把这段补成内边距后，
-     可见灰底里的图标与文字才真正上下居中。 */
-  height: calc(38px + var(--app-frame-bottom));
-  padding: 0 28px var(--app-frame-bottom);
+  /* 所有标题栏样式共用同一颗浮起胶囊；内容多时只收窄、不拉成整条底栏。 */
+  height: 38px;
+  padding: 0 16px;
   font-size: 14px;
   line-height: 1;
   color: var(--text-2);
-  background: var(--field-bg);
-  border-top: 1px solid var(--sep);
+  background: color-mix(in srgb, var(--main-bg) 74%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  border: 0;
+  border-radius: 999px;
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.18),
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent);
   overflow: hidden;
-  transform: translate3d(0, 0, 0);
-  transition:
-    transform 180ms cubic-bezier(0.22, 0.72, 0.24, 1),
-    opacity 0.16s ease;
+  transform: translate3d(0, var(--status-bar-lift), 0);
+  /* 展开那一程只推不淡，收起时才淡出。 */
+  transition: transform 180ms cubic-bezier(0.22, 0.72, 0.24, 1);
   will-change: transform, opacity;
 }
 .status-bar[hidden] {
   display: none;
 }
 .status-bar.is-collapsed {
-  transform: translate3d(0, 100%, 0);
+  transform: translate3d(
+    0,
+    calc(100% + var(--status-bar-hide) + var(--status-bar-lift)),
+    0
+  );
   opacity: 0;
   pointer-events: none;
+  transition:
+    transform 180ms cubic-bezier(0.22, 0.72, 0.24, 1),
+    opacity 0.14s ease;
+}
+/* 选择底栏占着底边时，状态条抬到它上面，两条不再叠在一起。 */
+.main:has(#selbar:not(.is-collapsed)) .status-bar {
+  --status-bar-lift: calc(-1 * var(--selbar-stack));
+}
+
+/* 磨砂标题栏仍使用同一颗胶囊，只把材质换成标题栏的毛玻璃。 */
+html.blur-titlebar .status-bar {
+  background: var(--blur-titlebar-surface);
+  -webkit-backdrop-filter: var(--blur-titlebar-backdrop);
+  backdrop-filter: var(--blur-titlebar-backdrop);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .status-bar {
-    transform: none !important;
+    transform: translate3d(0, var(--status-bar-lift), 0) !important;
     transition: opacity 80ms linear;
   }
 }
@@ -11514,25 +11713,26 @@ html[data-color-mode="dark"] .album-menu-separator {
 .status-import-cancel {
   flex: 0 0 auto;
   margin-left: auto;
+  /* 点击热区继续沿用原来的 52×27 盒子和内边距，视觉上只留下文字。 */
   min-width: 52px;
   height: 27px;
   padding: 0 12px;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--main-bg) 76%, transparent);
+  background: transparent;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
-  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: none;
   transition:
-    background 0.14s ease,
+    color 0.14s ease,
     transform 0.14s ease;
 }
 .status-import-cancel:hover {
-  background: color-mix(in srgb, var(--main-bg) 92%, transparent);
+  color: var(--accent);
 }
 .status-import-cancel:active {
-  background: var(--main-bg);
+  color: var(--accent);
   transform: scale(0.97);
 }
 .status-import-cancel:focus-visible {

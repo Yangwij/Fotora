@@ -27,7 +27,7 @@ test("拖动滑块总开关与时间刻度显示逻辑相互独立", () => {
   );
   assert.match(
     visible,
-    /return \(\s*showTimelineScrubber &&\s*state\.activeId === "library" &&\s*!photoWallSurfaceActive\(\)/,
+    /return \(\s*showTimelineScrubber &&\s*timelineGroupingViewActive\(\) &&\s*!photoWallSurfaceActive\(\)/,
   );
   assert.match(ticks, /const showsTime = libraryTimelineShowsTime\(\);/);
   assert.match(ticks, /if \(!showsTime\) return;/);
@@ -92,4 +92,45 @@ test("仅重复点击当前时间分段按钮时在底部与顶部之间切换",
   const toolbarBinding = app.slice(toolbarBindingStart, toolbarBindingEnd);
   assert.doesNotMatch(app, /scrollProjectAreaTo/);
   assert.doesNotMatch(toolbarBinding, /onClick:/);
+});
+
+test("相簿与图库共用时间按钮与右侧滑块", () => {
+  const viewGate = app.slice(
+    app.indexOf("function timelineGroupingViewActive()"),
+    app.indexOf("function libraryTimelineIsVisible()"),
+  );
+  assert.match(
+    viewGate,
+    /state\.activeId === "library" \|\| Boolean\(albumById\(state\.activeId\)\)/,
+  );
+  const control = app.slice(
+    app.indexOf("function syncLibraryTimelineModeControl("),
+    app.indexOf("let libraryTimelineSyncFrame"),
+  );
+  assert.match(control, /timelineGroupingViewActive\(\) &&/);
+  assert.match(
+    control,
+    /state\.roots\.length > 0 &&\s*state\.items\.length > 0;/,
+  );
+  const albumView = app.slice(
+    app.indexOf("function renderAlbumView(album)"),
+    app.indexOf("function renderLibraryView()"),
+  );
+  assert.match(albumView, /if \(state\.libraryTimelineMode !== "all"\) \{/);
+  assert.match(albumView, /<div class="library-timeline-groups/);
+  const load = app.slice(
+    app.indexOf("async function loadAlbum("),
+    app.indexOf("async function loadLibrary()"),
+  );
+  assert.match(load, /state\.albumItems = sortLibraryAlbumItems\(\);/);
+  /* 分组开着时排序改不动顺序，菜单里就不该再出现排序入口。 */
+  const albumMenu = app.slice(
+    app.indexOf("const visibleGroups = ALBUM_MENU_GROUPS.map((group) => ({"),
+    app.indexOf("const items = visibleGroups.flatMap((group) =>"),
+  );
+  assert.match(
+    albumMenu,
+    /id === "sort" &&\s*!albumMenuEditMode &&\s*timelineGroupingViewActive\(\) &&\s*state\.libraryTimelineMode !== "all"/,
+  );
+  assert.doesNotMatch(app, /label !== "排序"/);
 });

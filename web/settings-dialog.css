@@ -17,6 +17,28 @@
   display: none;
 }
 
+/* 「清除所有数据」的确认面板复用 app.js 那张 ask 卡片（默认 z-index 50）。
+   设置弹窗自己是 90，所以设置开着时要把确认面板抬到它上面，
+   否则确认框会被压在这层毛玻璃底下。 */
+.ux-settings-open .ask {
+  z-index: 96;
+}
+
+/* 确认面板开着时，把设置弹窗自己也压暗并模糊到和最低层图库同一程度，
+   视线只落在这张卡片上（和设置遮罩对图库的做法一致）。 */
+.ux-settings-open .ask-dim {
+  background: rgba(12, 12, 15, 0.34);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* 卡片底下已经被这层遮罩模糊过了，卡片自己的毛玻璃在这里没有额外收益，
+   关掉它还少叠一层 backdrop-filter（叠层越多越容易触发合成器怪癖）。 */
+.ux-settings-open .ask-card {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .ux-settings-dialog {
   display: flex;
   width: min(720px, calc(100vw - 44px));

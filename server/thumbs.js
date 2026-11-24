@@ -9,6 +9,10 @@ const path = require("node:path");
 const sharp = require("sharp");
 const lib = require("./library");
 const edits = require("./edits");
+const {
+  createThumbScheduler,
+  isThumbJobCancelled,
+} = require("./thumb-scheduler");
 
 /* libvips 读完一张原图，会把文件句柄 / 内存映射留着（它默认缓存最近用过的文件）。
    留着的话，系统就不许把这张照片「移动」进回收站 —— 删照片会莫名失败，
@@ -22,6 +26,40 @@ const EDIT_DIR = lib.EDIT_DIR;
 const SIZES = [128, 200, 400, 600, 800, 1600];
 const inflight = new Map();
 const posterInflight = new Map();
+
+/* 所有缩略图生成都过这道闸门：可见区（前台）永远优先，后台预生成只吃剩下的名额。
+   详见 thumb-scheduler.js。 */
+const thumbScheduler = createThumbScheduler();
+
+/* 权重按「大概要吃掉多少 CPU」给：视频要 ffmpeg 抽帧，RAW 要 exiftool 抠内嵌预览，
+   普通 JPEG 最快。一个名额大致等于一张普通照片的工作量。 */
+function thumbJobWeight(item) {
+  if (item?.kind === "video") return 3;
+  if (item?.path && lib.isRaw(item.path)) return 2;
+  return 1;
+}
+
+/**
+ * 统一入口：按 key 去重 + 排队 + 开工。
+ * lane = "interactive"（默认）表示用户正在看，排前台；
+ * lane = "background" 表示预热，只用空闲名额，并且可以随连接断开一起取消。
+ */
+function runThumbJob(key, lane, weight, signal, task) {
+  const existing = inflight.get(key);
+  if (existing) {
+    /* 后台预热排到一半、用户正好滚到这一格：提到前台队首，
+       顺便脱离那一批的取消信号，别把用户正在等的图给取消掉。 */
+    if (lane !== "background") thumbScheduler.promote(key);
+    return existing;
+  }
+  const job = thumbScheduler.submit({ key, lane, weight, signal, task });
+  inflight.set(key, job);
+  const clear = () => {
+    if (inflight.get(key) === job) inflight.delete(key);
+  };
+  job.then(clear, clear);
+  return job;
+}
 
 /* ffmpeg 用来给视频抽一张封面；放在项目 vendor 目录里，或者用 FFMPEG_PATH 指定 */
 const FFMPEG = [
@@ -730,80 +768,126 @@ async function ensureVideoPosterThumb(item, size, fit, poster) {
   }
 }
 
-/**
- * 拿到（必要时生成）缩略图文件路径。
- * 返回 null 表示这个文件做不出缩略图，前端画占位块。
- */
-async function ensureThumb(item, size, fit = "cover") {
-  const px = SIZES.includes(size) ? size : 400;
-  if (item?.kind === "video") {
-    const poster = lib.getVideoPoster(item.id);
-    if (poster) {
-      try {
-        const file = await ensureVideoPosterThumb(item, px, fit, poster);
-        if (file) return file;
-      } catch {
-        /* 自定义帧暂时生成失败时继续使用标准缩略图链路。 */
-      }
-    }
-  }
+/* 原图（没编辑、没自定义视频封面）的缩略图缓存路径。 */
+function plainThumbPath(item, px, fit) {
+  return path.join(
+    THUMB_DIR,
+    String(px),
+    `${item.id}${fit === "inside" ? "-fit" : ""}${
+      lib.isRaw(item.path) ? "-raw-v3" : ""
+    }.webp`,
+  );
+}
+
+/* 这一格该走哪条链路：自定义视频封面 > 已编辑 > 原图，三者的缓存文件名各不相同。 */
+function editedThumbContext(item) {
   if (
     ["photo", "video"].includes(item?.kind) &&
     Number(item.editRevision) > 0
   ) {
     const edit = lib.getItemEdit(item.id);
-    if (edit) return ensureEditedThumb(item, px, fit, edit);
+    if (edit) return { kind: "edit", edit };
   }
-  const dir = path.join(THUMB_DIR, String(px));
-  const outPath = path.join(
-    dir,
-    `${item.id}${fit === "inside" ? "-fit" : ""}${
-      lib.isRaw(item.path) ? "-raw-v3" : ""
-    }.webp`,
-  );
+  return { kind: "plain" };
+}
+
+function thumbJobContext(item) {
+  if (item?.kind === "video") {
+    const poster = lib.getVideoPoster(item.id);
+    if (poster) return { kind: "poster", poster };
+  }
+  return editedThumbContext(item);
+}
+
+function thumbCachePath(item, px, fit, ctx) {
+  if (ctx.kind === "poster") {
+    return videoPosterThumbPath(
+      item,
+      px,
+      fit,
+      Number(ctx.poster.revision) || 0,
+    );
+  }
+  if (ctx.kind === "edit") {
+    const revision =
+      Number(ctx.edit?.revision) || Number(item.editRevision) || 1;
+    return editedThumbPath(item, px, fit, revision);
+  }
+  return plainThumbPath(item, px, fit);
+}
+
+async function generatePlainThumb(item, px, fit, outPath, job) {
+  /* 排队这段时间里，别的请求可能已经把它生成好了，别白跑一次 sharp。 */
+  if (exists(outPath)) return outPath;
+  await fsp.mkdir(path.dirname(outPath), { recursive: true });
+  /* 按可能性排队试：原文件 → 内嵌预览（RAW）→ ffmpeg 抽帧（视频）→ Windows 解码器（HEIC） */
+  const attempts = [];
+  if (item.kind === "video") {
+    attempts.push(() => videoPoster(item));
+  } else if (lib.isRaw(item.path)) {
+    attempts.push(() => extractEmbeddedPreview(item));
+    attempts.push(() => windowsPreview(item));
+  } else {
+    attempts.push(async () => item.path);
+    attempts.push(() => extractEmbeddedPreview(item));
+    attempts.push(() => windowsPreview(item));
+  }
+  for (const attempt of attempts) {
+    /* 这一批预热已经作废（用户滚走了 / 连接断了），剩下的尝试不必再做。 */
+    if (job?.cancelled?.()) return null;
+    try {
+      const input = await attempt();
+      if (!input) continue;
+      await render(input, px, outPath, fit);
+      return outPath;
+    } catch {
+      /* 这一种不行，换下一种 */
+    }
+  }
+  return null;
+}
+
+async function generateThumbJob(item, px, fit, initialContext, job) {
+  if (job?.cancelled?.()) return null;
+  let ctx = initialContext;
+  /* 排队期间状态可能变了（刚编辑过 / 刚设了视频封面），开工时重新判一次。 */
+  if (ctx.kind === "poster") {
+    try {
+      const file = await ensureVideoPosterThumb(item, px, fit, ctx.poster);
+      if (file) return file;
+    } catch {
+      /* 自定义帧暂时生成失败时继续使用标准缩略图链路。 */
+    }
+    ctx = editedThumbContext(item);
+  }
+  if (ctx.kind === "edit") return ensureEditedThumb(item, px, fit, ctx.edit);
+  return generatePlainThumb(item, px, fit, plainThumbPath(item, px, fit), job);
+}
+
+/**
+ * 拿到（必要时生成）缩略图文件路径。
+ * 返回 null 表示这个文件做不出缩略图，前端画占位块。
+ * options.lane = "background" 表示这是后台预热：可以让路，也可以被取消；
+ * options.signal 作废时，还没开工的任务会被丢掉，把名额让给可见区。
+ */
+async function ensureThumb(item, size, fit = "cover", options = {}) {
+  const px = SIZES.includes(size) ? size : 400;
+  const ctx = thumbJobContext(item);
+  const outPath = thumbCachePath(item, px, fit, ctx);
   try {
     const st = await fsp.stat(outPath);
     if (st.size > 0) return outPath;
   } catch {
     /* 需要生成 */
   }
-
-  const key = `${item.id}@${px}@${fit}`;
-  if (inflight.has(key)) return inflight.get(key);
-
-  const job = (async () => {
-    await fsp.mkdir(dir, { recursive: true });
-    /* 按可能性排队试：原文件 → 内嵌预览（RAW）→ ffmpeg 抽帧（视频）→ Windows 解码器（HEIC） */
-    const attempts = [];
-    if (item.kind === "video") {
-      attempts.push(() => videoPoster(item));
-    } else if (lib.isRaw(item.path)) {
-      attempts.push(() => extractEmbeddedPreview(item));
-      attempts.push(() => windowsPreview(item));
-    } else {
-      attempts.push(async () => item.path);
-      attempts.push(() => extractEmbeddedPreview(item));
-      attempts.push(() => windowsPreview(item));
-    }
-    try {
-      for (const attempt of attempts) {
-        try {
-          const input = await attempt();
-          if (!input) continue;
-          await render(input, px, outPath, fit);
-          return outPath;
-        } catch {
-          /* 这一种不行，换下一种 */
-        }
-      }
-      return null;
-    } finally {
-      inflight.delete(key);
-    }
-  })();
-
-  inflight.set(key, job);
-  return job;
+  const lane = options?.lane === "background" ? "background" : "interactive";
+  return runThumbJob(
+    `${item.id}@${px}@${fit}`,
+    lane,
+    thumbJobWeight(item),
+    options?.signal || null,
+    (job) => generateThumbJob(item, px, fit, thumbJobContext(item), job),
+  );
 }
 
 async function ensurePhotoWallThumb(item, size, crop = null) {
@@ -1042,6 +1126,8 @@ async function viewableFile(item) {
 
 module.exports = {
   ensureThumb,
+  thumbScheduler,
+  isThumbJobCancelled,
   ensurePhotoWallThumb,
   ensureMasonryWallThumb,
   ensureFilmrollWallThumb,

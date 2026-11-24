@@ -15,6 +15,9 @@ const edits = require("./edits");
 
 const PORT = Number(process.env.PORT || 4599);
 const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+/* 一次预热请求最多带多少张：前端按小批发，滚到哪里就补到哪里，
+   批太大则「让路」和「重新瞄准」都不够灵敏。 */
+const THUMB_PREFETCH_MAX_IDS = 96;
 const WEB_DIR = path.join(__dirname, "..", "web");
 const WINDOW_CONTROL_SCRIPT = path.join(__dirname, "window-control.ps1");
 const compatibilityVideoJobs = new Map();
@@ -618,6 +621,8 @@ async function handleApi(req, res, url) {
     pathname !== "/api/window/toggle" &&
     pathname !== "/api/photo-wall/crop" &&
     pathname !== "/api/masonry-wall/crop" &&
+    /* 预热缩略图只是读图生成缓存，不改任何数据，不该把「撤销」清掉。 */
+    pathname !== "/api/thumbs/prefetch" &&
     pathname !== "/api/pick-folder"
   ) {
     clearUndo();
@@ -1808,7 +1813,29 @@ async function handleApi(req, res, url) {
     /* fit=inside 时不做方形裁剪，保留照片原始宽高比（1600 这么大的一律不裁） */
     const fit =
       url.searchParams.get("fit") || (size >= 1600 ? "inside" : "cover");
-    const file = await thumbs.ensureThumb(item, size, fit);
+    /* 虚拟网格的格子是复用的：往下一滑，滚出屏幕的那些 <img> 立刻被换成新的
+       src，浏览器随即掐断旧连接。跟着连接一起取消还没开工的任务，名额才腾得
+       出来给用户真正停下来的那一屏 —— 否则快速滚一路，前面几百张还在排队，
+       停下来反而要等它们慢慢跑完。 */
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    req.once("close", onClose);
+    let file = null;
+    try {
+      /* 不传 lane：可见区请求默认就是前台，优先级最高。 */
+      file = await thumbs.ensureThumb(item, size, fit, {
+        signal: controller.signal,
+      });
+    } catch (err) {
+      /* 用户已经滚走了，这一格没人要了：静默收场，不写响应也不记日志。 */
+      if (thumbs.isThumbJobCancelled(err)) return;
+      throw err;
+    } finally {
+      req.removeListener("close", onClose);
+    }
+    if (res.destroyed || res.writableEnded) return;
     if (!file) {
       /* 源文件不在了（被外部移动 / 删除）和格式不支持是两回事：
          前者给 404，客户端显示「加载失败 + 重试」，文件恢复后重试能救回来；
@@ -1819,6 +1846,62 @@ async function handleApi(req, res, url) {
       return fail(res, "这个格式暂时做不出缩略图", 415);
     }
     return sendFile(req, res, file, { cache: true });
+  }
+
+  /* 缩略图预热：前端滚到哪里，就先给哪里生成，剩下的在后台慢慢补。
+     这个接口只把服务端的磁盘缓存做出来，不回图片本身 —— 随后 <img> 的
+     GET /api/thumb 命中同一个文件，几毫秒就返回，不会再看到骨架灰块。
+     任务一律走后台队列，用户真正在看的那一格永远优先（见 thumb-scheduler.js）。 */
+  if (pathname === "/api/thumbs/prefetch" && req.method === "POST") {
+    const body = await readBody(req);
+    const ids = [
+      ...new Set(
+        (Array.isArray(body.ids) ? body.ids : [])
+          .map(Number)
+          .filter((n) => Number.isInteger(n) && n > 0),
+      ),
+    ].slice(0, THUMB_PREFETCH_MAX_IDS);
+    if (!ids.length) return fail(res, "没有需要预生成的缩略图");
+    const requestedSize = Number(body.size);
+    const size = thumbs.SIZES.includes(requestedSize) ? requestedSize : 400;
+    const fit = body.fit === "cover" ? "cover" : "inside";
+    /* 前端滚走了、切了视图或者关了窗口：连接一断就取消还没开工的任务，
+       把名额让给可见区。已经在跑的那几张会跑完，磁盘缓存不算白做。 */
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    req.once("close", onClose);
+    try {
+      const results = await Promise.allSettled(
+        ids.map((id) => {
+          const item = lib.getItem(id);
+          if (!item) return Promise.resolve(null);
+          return thumbs.ensureThumb(item, size, fit, {
+            lane: "background",
+            signal: controller.signal,
+          });
+        }),
+      );
+      let warmed = 0;
+      let failed = 0;
+      let cancelled = 0;
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          if (result.value) warmed += 1;
+          else failed += 1;
+        } else if (result.reason?.code === "THUMB_JOB_ABORTED") {
+          cancelled += 1;
+        } else {
+          failed += 1;
+        }
+      }
+      /* 连接已经断了就没必要再写响应；这时候前端也早就不等这一批了。 */
+      if (res.destroyed || res.writableEnded) return;
+      return json(res, { requested: ids.length, warmed, failed, cancelled });
+    } finally {
+      req.removeListener("close", onClose);
+    }
   }
 
   if (parts[1] === "photo-wall" && parts[2] === "thumb" && parts[3]) {

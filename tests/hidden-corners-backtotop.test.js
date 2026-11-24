@@ -31,6 +31,24 @@ test("回到顶部弹簧入场，滚过一屏才出现，避开选择/照片墙/
   assert.match(app, /scheduleVisibleContextMapPreviews\(\);\s*syncBackToTop\(\);/);
 });
 
+test("导入没跑完时不显示回到顶部按钮，完成或取消后恢复", () => {
+  const sync = app.slice(
+    app.indexOf("function syncBackToTop()"),
+    app.indexOf("function scrollContentToTop()"),
+  );
+  assert.match(sync, /!rootImportRunning\(\)/);
+  assert.match(
+    app,
+    /function rootImportRunning\(\) \{\s*return Boolean\(state\.rootImport\) \|\| rootImportInProgress;\s*\}/,
+  );
+  /* 底栏状态一变就重新判定：导入开始、点取消、导入落定都立刻生效 */
+  const status = app.slice(
+    app.indexOf("function renderStatus()"),
+    app.indexOf("let quietUntil"),
+  );
+  assert.match(status, /syncBackToTop\(\);/);
+});
+
 test("回到顶部按钮默认是深色半透明底，悬停切换为浅色玻璃底", () => {
   assert.match(
     styles,

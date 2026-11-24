@@ -27,8 +27,19 @@ test("照片滚到标题栏上沿时不会越过主区域", () => {
   );
   assert.match(
     rule(
-      'html[data-window-controls="hidden"].blur-titlebar:not(.transparent-titlebar) .toolbar',
+      'html[data-window-controls="hidden"]:not(.hide-glass-border).blur-titlebar:not(.transparent-titlebar) .toolbar',
     ),
     /top:\s*calc\(var\(--toolbar-offset-y\) - 1px\)/,
+  );
+});
+
+test("隐藏窗口控件且关闭玻璃边框时顶部不留内缩", () => {
+  /* 顶部内缩必须跟随上半部玻璃边，而不是写死 6px；
+     否则隐藏控件 + 关边框时标题栏仍会下移并在顶边留下残边。 */
+  assert.match(rule(":root"), /--toolbar-offset-y:\s*var\(--app-frame-top\)/);
+  assert.match(rule("html.hide-glass-border"), /--app-frame-top:\s*0px/);
+  assert.match(
+    rule("html.hide-glass-border"),
+    /--window-frame-y:\s*var\(--window-controls-band\)/,
   );
 });

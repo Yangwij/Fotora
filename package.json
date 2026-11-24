@@ -1,6 +1,6 @@
 {
   "name": "fotora",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "private": true,
   "description": "Fotora：本地桌面照片与视频管理应用",
   "main": "electron/main.js",
@@ -37,6 +37,9 @@
   "build": {
     "appId": "com.fotora.app",
     "productName": "Fotora",
+    "extraMetadata": {
+      "description": "Fotora"
+    },
     "compression": "maximum",
     "asar": true,
     "afterPack": "scripts/after-pack.js",

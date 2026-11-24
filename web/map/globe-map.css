@@ -760,6 +760,9 @@ body.is-satellite .globe-notice {
 
 .pm-photo-icon img {
   display: block;
+  position: relative;
+  /* 照片压在定位柔光之上：两者都在同一个标记里，靠层级决定谁遮住谁。 */
+  z-index: 1;
   border: 2px solid var(--photo-marker-paper);
   border-radius: 4px;
   background: var(--photo-marker-paper);
@@ -870,61 +873,67 @@ body.is-location-assign .globe-attribution {
   }
 }
 
-/* 点击照片栏后的确认反馈：两圈先后扩散的水波，后一圈略轻。 */
+/* 点击照片栏里的照片、飞行定位到之后的确认：一圈柔光紧贴照片边缘
+   向外发散再收掉，说明“就是这一张”。柔光节点由 pingMarker() 插在
+   img 之前，因此始终画在照片后面，只描边发光、不遮挡缩略图。 */
 .pm-ping {
+  --pm-ping-color: var(--accent, #0a84ff);
+  --pm-ping-glow: color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
   position: absolute;
-  z-index: 20;
   border: 0;
   background: transparent;
-  box-shadow: none;
-  opacity: 1;
   pointer-events: none;
-  transform-origin: 50% 50%;
-  animation: none;
 }
 
-.pm-ping::before,
-.pm-ping::after {
-  content: "";
+.pm-ping-halo {
   position: absolute;
+  /* 和照片的边框盒完全重合：柔光从照片边缘起散，
+     不留缝隙，否则读起来像一个独立浮在照片外的框。 */
   inset: 0;
-  border: 1.5px solid rgba(0, 86, 214, 0.96);
-  border-radius: inherit;
-  box-shadow:
-    0 0 14px rgba(0, 78, 198, 0.3),
-    0 0 26px rgba(0, 78, 198, 0.14);
+  z-index: 1;
+  border-radius: 4px;
   opacity: 0;
+  transform: scale(0.98);
   transform-origin: 50% 50%;
+  /* 描边落在照片边缘上，光晕只往外走，贴边感靠这两层近光撑住。 */
+  box-shadow:
+    0 0 0 1.5px var(--pm-ping-color),
+    0 0 12px 1px var(--pm-ping-glow),
+    0 0 26px 6px var(--pm-ping-glow);
   pointer-events: none;
 }
 
-.pm-ping::after {
-  border-color: rgba(24, 86, 200, 0.86);
-  box-shadow:
-    0 0 12px rgba(0, 78, 198, 0.22),
-    0 0 22px rgba(0, 78, 198, 0.1);
+.pm-ping.on .pm-ping-halo {
+  /* 唯一的定位反馈：亮得果断，收得从容。 */
+  animation: pmPingHalo 600ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1))
+    both;
 }
 
-.pm-ping.on::before {
-  animation: pmPingWave 300ms cubic-bezier(0.23, 1, 0.32, 1) both;
-}
-
-.pm-ping.on::after {
-  animation: pmPingWave 300ms cubic-bezier(0.23, 1, 0.32, 1) 140ms both;
-}
-
-@keyframes pmPingWave {
+@keyframes pmPingHalo {
   0% {
+    /* 起手略小于照片：描边藏在照片边缘底下，
+       看起来是从照片边“渗出来”而不是凭空出现一个框。 */
     transform: scale(0.98);
     opacity: 0;
+    /* 亮起要果断：起手用快曲线。 */
+    animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
   }
-  14% {
-    opacity: 0.84;
+  20% {
+    opacity: 1;
+    /* 收掉要从容：整段 ease-out 会让中段一下子就淡掉，
+       这里换成对称曲线，让柔光在最亮处多停一会儿。 */
+    animation-timing-function: cubic-bezier(0.33, 0, 0.55, 1);
   }
   100% {
-    transform: scale(1.5);
+    transform: scale(1.15);
     opacity: 0;
   }
+}
+
+/* 卫星图偏暗，主题强调色直接压上去会发闷，这里提亮一档。 */
+body.is-satellite .pm-ping {
+  --pm-ping-color: color-mix(in srgb, var(--accent, #0a84ff) 62%, #fff);
+  --pm-ping-glow: color-mix(in srgb, var(--accent, #0a84ff) 55%, transparent);
 }
 
 .photos-hidden .pm-photo-icon,
@@ -945,26 +954,25 @@ body.is-location-assign .globe-attribution {
   .globe-close-button,
   .pm-photo-icon img,
   .pm-ping,
-  .pm-ping.on {
+  .pm-ping.on,
+  .pm-ping.on .pm-ping-halo {
     transition: none;
     animation: none;
   }
 
-  /* 减少动态时去掉扩散，只保留一次短促的轮廓确认。 */
-  .pm-ping.on::before {
-    animation: pmPingReduced 180ms ease-out both;
+  /* 减少动态时连那一点轻微的放大也去掉，只保留一次不透明度短闪：
+     仍然看得出选中的是哪一张，但没有任何位移。 */
+  .pm-ping.on .pm-ping-halo {
+    transform: scale(1);
+    animation: pmPingHaloReduced 220ms ease-out both;
   }
 
-  .pm-ping.on::after {
-    animation: none;
-  }
-
-  @keyframes pmPingReduced {
+  @keyframes pmPingHaloReduced {
     0% {
       opacity: 0;
     }
     35% {
-      opacity: 0.72;
+      opacity: 0.9;
     }
     100% {
       opacity: 0;

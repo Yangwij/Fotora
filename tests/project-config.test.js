@@ -18,6 +18,16 @@ test("安装包名称只显示 Fotora", () => {
   assert.equal(pkg.build.nsis.uninstallDisplayName, "Fotora");
 });
 
+test("桌面快捷方式的悬停提示只显示 Fotora", () => {
+  const pkg = JSON.parse(
+    fs.readFileSync(path.join(root, "package.json"), "utf8"),
+  );
+
+  // NSIS 用 APP_DESCRIPTION 写入快捷方式的“备注”，Windows 悬停时显示的就是它，
+  // 因此打包用的 description 必须只是产品名，不能是整句介绍。
+  assert.equal(pkg.build.extraMetadata.description, "Fotora");
+});
+
 test("源码运行要求与 Electron 的 Node 版本一致", () => {
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
   assert.match(readme, /Node\.js 22\.12 或更高版本/);

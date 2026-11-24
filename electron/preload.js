@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("albumWindow", {
   },
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:set", settings),
+  getDataDir: () => ipcRenderer.invoke("settings:data-dir"),
   clearAllData: () => ipcRenderer.invoke("settings:clear-all-data"),
   toggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
   setWindowControlsStyle: (style) =>

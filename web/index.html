@@ -438,7 +438,7 @@
               class="library-time-modes"
               id="libraryTimelineModes"
               role="group"
-              aria-label="图库时间分组"
+              aria-label="时间分组"
               hidden
             >
               <span
@@ -1090,40 +1090,6 @@
               ></div>
             </div>
           </section>
-        </div>
-        <!-- 彻底删除的确认面板：位置由 JS 贴着底栏按钮现算 -->
-        <div class="ask" id="ask" hidden>
-          <div class="ask-dim"></div>
-          <div
-            class="ask-card"
-            id="askCard"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby="askTitle"
-            aria-describedby="askMsg askNote"
-          >
-            <div class="ask-head">
-              <div class="ask-copy">
-                <h2 class="ask-title" id="askTitle">彻底删除这些项目？</h2>
-                <p class="ask-msg" id="askMsg"></p>
-                <p class="ask-note" id="askNote"></p>
-              </div>
-            </div>
-            <div class="ask-actions">
-              <button
-                class="ask-action ask-cancel"
-                id="askCancel"
-                type="button"
-              >
-                取消
-              </button>
-              <button
-                class="ask-action ask-confirm"
-                id="askOk"
-                type="button"
-              ></button>
-            </div>
-          </div>
         </div>
 
         <!-- 「选项」弹出来的相簿列表：一层浅灰蒙住当前这个选择界面（背景还看得见），
@@ -1969,6 +1935,38 @@
 
         <p class="shortcuts-foot">按 <kbd>?</kbd> 或 <kbd>Esc</kbd> 关闭</p>
       </section>
+    </div>
+
+    <!-- 确认面板挂在 body 上：.app 是 isolation: isolate 的独立层叠上下文（z-index 1），
+         面板留在里面就永远压不过设置弹窗（z-index 90）这类 body 级浮层。 -->
+    <div class="ask" id="ask" hidden>
+      <div class="ask-dim"></div>
+      <div
+        class="ask-card"
+        id="askCard"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="askTitle"
+        aria-describedby="askMsg askNote"
+      >
+        <div class="ask-head">
+          <div class="ask-copy">
+            <h2 class="ask-title" id="askTitle">彻底删除这些项目？</h2>
+            <p class="ask-msg" id="askMsg"></p>
+            <p class="ask-note" id="askNote"></p>
+          </div>
+        </div>
+        <div class="ask-actions">
+          <button class="ask-action ask-cancel" id="askCancel" type="button">
+            取消
+          </button>
+          <button
+            class="ask-action ask-confirm"
+            id="askOk"
+            type="button"
+          ></button>
+        </div>
+      </div>
     </div>
 
     <script src="ui-language.js?v=2"></script>

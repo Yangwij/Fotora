@@ -125,10 +125,14 @@ test("导出和导入状态条是不占布局的浮层，不推动照片网格",
   );
 
   assert.match(statusCss, /position: absolute;/);
-  assert.match(statusCss, /bottom: 0;/);
-  assert.match(statusCss, /height: calc\(38px \+ var\(--app-frame-bottom\)\);/);
+  assert.match(statusCss, /bottom: 12px;/);
+  assert.match(statusCss, /height: 38px;/);
+  assert.match(statusCss, /border-radius: 999px;/);
   assert.match(statusCss, /transition:[\s\S]*?transform 180ms/);
-  assert.match(collapsed, /transform: translate3d\(0, 100%, 0\);/);
+  assert.match(
+    collapsed,
+    /transform: translate3d\(\s*0,\s*calc\(100% \+ var\(--status-bar-hide\) \+ var\(--status-bar-lift\)\),\s*0\s*\);/,
+  );
   assert.doesNotMatch(collapsed, /height:\s*0;/);
   assert.doesNotMatch(collapsed, /padding(?:-top|-bottom)?:\s*0;/);
 });

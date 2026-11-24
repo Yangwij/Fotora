@@ -149,7 +149,7 @@
     "Windows 窗口控制": "Windows window controls",
     收起相簿栏: "Collapse sidebar",
     展开相簿栏: "Expand sidebar",
-    图库时间分组: "Library time grouping",
+    时间分组: "Time grouping",
     在当前相簿里新建一个相簿: "Create an album in the current album",
     在文件资源管理器中显示项目: "Show item in File Explorer",
     项目位置预览准备区: "Item location preview",
@@ -187,8 +187,9 @@
     最小化到托盘: "Minimize to tray",
     数据管理: "Data management",
     清除所有数据: "Clear All Data",
-    "将永久删除 Fotora 的应用数据文件夹（默认位于 %LOCALAPPDATA%\\Fotora），包括图库索引、相册、收藏、评分、编辑与裁剪、界面设置和缩略图等缓存。不会删除图库源文件夹中的原始照片和视频，也不会删除已经导出的文件。确认后会退出 Fotora，删除完成后自动重新启动。":
-      "This permanently deletes Fotora’s app data folder (by default, %LOCALAPPDATA%\\Fotora), including the library index, albums, favorites, ratings, edits and crops, interface settings, and thumbnail caches. Original photos and videos in library source folders will not be deleted, nor will files you have already exported. After confirmation, Fotora will quit and restart automatically once the folder has been removed.",
+    确认: "Confirm",
+    "删除本机该应用的数据，不影响原始照片":
+      "Deletes the app’s data on this computer. Your original photos are not affected.",
     图库与相簿栏: "Library & Sidebar",
     图库浏览: "Library browsing",
     默认照片布局: "Default photo layout",
@@ -482,6 +483,11 @@
     删除选中的相簿和照片视频: "Delete selected albums and media",
     此操作不可撤销: "This action cannot be undone.",
     移除: "Remove",
+    "清除 Fotora 的所有数据？": "Clear all Fotora data?",
+    "将删除图库索引、相簿、收藏、评分、编辑与裁剪、拍摄时间与位置修改、界面设置和缩略图缓存。\n不会删除图库源文件夹里的原始照片和视频，也不会删除已经导出的文件。\n确认后 Fotora 会退出并完成清除。此操作不可撤销。":
+      "This deletes the library index, albums, favorites, ratings, edits and crops, capture time and location changes, interface settings, and thumbnail caches.\nOriginal photos and videos in your library source folders are not deleted, and neither are the files you have already exported.\nFotora quits once you confirm and finishes clearing the data. This action cannot be undone.",
+    暂时无法清除数据: "Can’t clear data right now",
+    知道了: "Got it",
     图库中找不到这个项目: "This item could not be found in the library.",
     项目详细: "Item Details",
     这些项目已经在相簿里: "These items are already in the album.",

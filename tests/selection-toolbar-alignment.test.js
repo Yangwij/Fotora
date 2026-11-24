@@ -15,7 +15,7 @@ const uiLanguage = fs.readFileSync(
 test("选择底栏与顶栏共用窗框补偿后的左右边距", () => {
   assert.match(
     css,
-    /\.selbar\s*\{[\s\S]*?padding:\s*0 var\(--sidebar-rail-visual-left\) 8px\s*var\(--toolbar-visible-inset\)/,
+    /\.selbar\s*\{[\s\S]*?padding:\s*0 var\(--sidebar-rail-visual-left\) var\(--app-frame-bottom\)\s*var\(--toolbar-visible-inset\)/,
   );
 });
 

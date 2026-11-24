@@ -18,6 +18,10 @@
   const MARKER_FULL_ZOOM = 10.5;
   const MIN_MARKER_SCALE = 0.3;
   const MARKER_TAIL_HEIGHT = 12;
+  /* 定位柔光的播放时长，和 globe-map.css 里 pmPingHalo 保持一致。
+     播完就把节点摘掉，只亮这一次。 */
+  const PING_HALO_MS = 600;
+  const PING_HALO_TAIL_MS = 80;
   /* MapLibre 的技术下限；实际下限按当前视口能完整容纳地球圆时动态计算。 */
   const MAP_MIN_ZOOM = 0.5;
   const MAP_MAX_ZOOM = 20;
@@ -252,6 +256,8 @@
       this.markerBadges = [];
       this.markerRecords = new Map();
       this.selectedMarkerEl = null;
+      this.pingHost = null;
+      this.pingTimer = 0;
       this.photoCanvas = null;
       this.photoCanvasContext = null;
       this.photoCanvasBuffer = null;
@@ -2078,7 +2084,6 @@
       this.lastMarkerClickAt = now;
       this.selectedId = item.id;
       this.syncMarkerSelection();
-      this.pingMarker();
       this.post("select-item", { id: item.id });
       if (group.isSpatialCluster) {
         const [lng, lat] = this.toMapLngLat(item.lat, item.lon);
@@ -2104,6 +2109,7 @@
     }
 
     clearMarkers() {
+      this.clearPing();
       for (const marker of this.markers) marker.remove();
       this.markers = [];
       this.markerImgs = [];
@@ -2479,7 +2485,9 @@
       delete document.body.dataset.targetLon;
     }
 
-    focusItem(id, { zoom = 12, ripple = true, keepZoom = true } = {}) {
+    /* 定位柔光是照片栏点击专属的反馈，默认不发；
+       只有 album-map / locations 收到照片栏点击消息时才显式打开。 */
+    focusItem(id, { zoom = 12, ripple = false, keepZoom = true } = {}) {
       const item = this.items.find((entry) => entry.id === Number(id));
       if (!item || !this.map) return false;
       this.selectedId = item.id;
@@ -2624,6 +2632,22 @@
       return maximumPeak - peak < FLY_FIT_PEAK_DEADBAND ? maximumPeak : peak;
     }
 
+    /* 把柔光节点彻底收掉：换照片时收上一张，播完时收自己。
+       节点只要还带着 .on 留在标记里，等标记被移出又挂回 DOM
+       （比如关掉地图再打开）动画就会重播一次，看起来像“一打开地图就亮”。 */
+    clearPing() {
+      if (this.pingTimer) {
+        clearTimeout(this.pingTimer);
+        this.pingTimer = 0;
+      }
+      const host = this.pingHost;
+      this.pingHost = null;
+      host?.querySelector(".pm-ping")?.remove();
+    }
+
+    /* 点击照片栏里的照片、飞行定位到之后的确认：
+       在照片背后亮一圈紧贴边缘的柔光，向外发散一次再收掉。
+       柔光节点插在 img 之前，所以始终画在照片后面，不会遮挡缩略图。 */
     pingMarker() {
       const element = this.selectedMarkerEl;
       if (!element || !element.isConnected) return;
@@ -2632,20 +2656,35 @@
       const scale = this.curMarkerScale || 1;
       const elementRect = element.getBoundingClientRect();
       const imageRect = image.getBoundingClientRect();
+      if (this.pingHost && this.pingHost !== element) this.clearPing();
       let ring = element.querySelector(".pm-ping");
       if (!ring) {
         ring = document.createElement("span");
         ring.className = "pm-ping";
-        element.appendChild(ring);
+        const halo = document.createElement("span");
+        halo.className = "pm-ping-halo";
+        ring.appendChild(halo);
+        element.insertBefore(ring, image);
       }
-      ring.style.left = `${imageRect.left - elementRect.left - 2}px`;
-      ring.style.top = `${imageRect.top - elementRect.top - 2}px`;
-      ring.style.width = `${imageRect.width + 4}px`;
-      ring.style.height = `${imageRect.height + 4}px`;
-      ring.style.borderRadius = `${3 + 4 * scale}px`;
+      const halo = ring.querySelector(".pm-ping-halo");
+      ring.style.left = `${imageRect.left - elementRect.left}px`;
+      ring.style.top = `${imageRect.top - elementRect.top}px`;
+      ring.style.width = `${imageRect.width}px`;
+      ring.style.height = `${imageRect.height}px`;
+      if (halo) {
+        /* 柔光盒和照片边框盒重合，圆角也就跟着照片一起缩放。 */
+        halo.style.borderRadius = `${Math.max(1, Math.round(4 * scale))}px`;
+      }
       ring.classList.remove("on");
       void ring.offsetWidth;
       ring.classList.add("on");
+      this.pingHost = element;
+      /* 播完自己收掉：这个反馈只该在定位落定的那一下出现一次。 */
+      if (this.pingTimer) clearTimeout(this.pingTimer);
+      this.pingTimer = setTimeout(() => {
+        this.pingTimer = 0;
+        if (this.pingHost === element) this.clearPing();
+      }, PING_HALO_MS + PING_HALO_TAIL_MS);
     }
 
     flyToPlace(lng, lat, targetZoom, options = {}) {

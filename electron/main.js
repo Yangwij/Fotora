@@ -36,7 +36,7 @@ const PRODUCT = "Fotora";
 const PRODUCT_SLUG = "fotora";
 const LEGACY_DATA_FOLDERS = ["Photo", "Album"];
 const DATA_FOLDER = "Fotora";
-const CLEAR_DATA_FLAG = "--fotora-clear-data-on-start";
+const CLEAR_DATA_MARKER = "clear-data-on-next-start";
 const APP_ID = "com.fotora.app";
 const PERSISTENT_SETTINGS_VERSION = 2;
 const DEFAULT_LIBRARY_TITLE = PRODUCT;
@@ -83,7 +83,10 @@ if (explicitBase) {
   baseDir = legacy ? migrateLegacyDataDirectory(legacy, next) : next;
 }
 let clearDataStartupError = null;
-if (process.argv.includes(CLEAR_DATA_FLAG)) {
+/* 清除后不再自动重启：确认时只在数据目录里留一个标记文件就退出，
+   下次手动启动时先按标记清除、再进应用 —— 进程活着的时候 Chromium
+   会锁住这个目录里的文件，边跑边删并不可靠。 */
+if (fs.existsSync(path.join(baseDir, CLEAR_DATA_MARKER))) {
   try {
     clearDataDirectory(baseDir, [
       appDataRoot,
@@ -780,48 +783,6 @@ ipcMain.handle("window:get-position", () =>
 
 let clearAllDataPending = false;
 
-function clearDataRelaunchArguments() {
-  return [
-    ...process.argv.slice(1).filter((argument) => argument !== CLEAR_DATA_FLAG),
-    CLEAR_DATA_FLAG,
-  ];
-}
-
-async function showClearAllDataConfirmation() {
-  const options = {
-    type: "warning",
-    title: localizedText("清除所有数据", "Clear All Data"),
-    message: localizedText(
-      "确定要清除 Fotora 的所有数据吗？",
-      "Clear all Fotora data?",
-    ),
-    detail: localizedText(
-      `将永久删除：\n${baseDir}\n\n` +
-        "这会清除图库导入记录、相册、收藏、评分、编辑与裁剪、界面设置和缓存。\n\n" +
-        "不会删除：\n" +
-        "• 图库源文件夹中的原始照片和视频\n" +
-        "• 已经导出的照片和视频\n\n" +
-        "清除完成后，Fotora 会自动重新启动。",
-      `This permanently deletes:\n${baseDir}\n\n` +
-        "This clears imported-library records, albums, favorites, ratings, edits and crops, interface settings, and caches.\n\n" +
-        "It does not delete:\n" +
-        "• Original photos and videos in your library source folders\n" +
-        "• Photos and videos you have already exported\n\n" +
-        "Fotora will restart automatically after clearing the data.",
-    ),
-    buttons: [
-      localizedText("取消", "Cancel"),
-      localizedText("清除所有数据", "Clear All Data"),
-    ],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-  };
-  return mainWindow && !mainWindow.isDestroyed()
-    ? dialog.showMessageBox(mainWindow, options)
-    : dialog.showMessageBox(options);
-}
-
 ipcMain.handle("settings:get", () => normalizeSettings(readSettingsFile()));
 ipcMain.handle("settings:set", (_event, settings) => {
   const result = writeSettingsFile(settings);
@@ -835,57 +796,50 @@ ipcMain.handle("settings:set", (_event, settings) => {
   }
   return result;
 });
+/* 确认面板要在界面里写出真实的数据目录，所以渲染进程可以来问一次。 */
+ipcMain.handle("settings:data-dir", () => baseDir);
 ipcMain.handle("settings:clear-all-data", async () => {
+  /* 确认这一步已经交给渲染进程里那张界面内确认面板（和「从 Fotora 中移除」
+     同一个组件），主进程只负责执行，不再弹原生对话框。
+     没法执行时把原因回给界面，由同一个面板样式告知用户。 */
   if (clearAllDataPending) {
     return {
       ok: false,
       error: localizedText(
-        "正在清除数据，请稍候",
-        "Fotora is already clearing data.",
+        "正在清除数据，请稍候。",
+        "Fotora is already clearing data. Wait a moment.",
       ),
     };
   }
   if (activeExport) {
-    const options = {
-      type: "info",
-      title: localizedText("清除所有数据", "Clear All Data"),
-      message: localizedText(
-        "请先完成或取消当前导出",
-        "Finish or cancel the current export first",
+    return {
+      ok: false,
+      error: localizedText(
+        "请先完成或取消当前导出。导出任务结束后，再清除所有数据。",
+        "Finish or cancel the current export first. You can clear all data once that export is done.",
       ),
-      detail: localizedText(
-        "导出任务结束后，再清除所有数据。",
-        "Clear all data after the export has finished or been canceled.",
-      ),
-      buttons: [localizedText("知道了", "OK")],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
     };
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      await dialog.showMessageBox(mainWindow, options);
-    } else {
-      await dialog.showMessageBox(options);
-    }
-    return { ok: false, canceled: true };
   }
-
-  const result = await showClearAllDataConfirmation();
-  if (result.response !== 1) return { ok: false, canceled: true };
 
   clearAllDataPending = true;
   try {
-    app.relaunch({ args: clearDataRelaunchArguments() });
+    fs.writeFileSync(
+      path.join(baseDir, CLEAR_DATA_MARKER),
+      new Date().toISOString(),
+    );
     shutdown();
     setTimeout(() => app.quit(), 40);
-    return { ok: true, restarting: true };
+    return { ok: true };
   } catch (err) {
     clearAllDataPending = false;
-    dialog.showErrorBox(
-      localizedText("清除所有数据失败", "Could Not Clear Data"),
-      String(err?.message || err),
-    );
-    return { ok: false, error: String(err?.message || err) };
+    const reason = String(err?.message || err);
+    return {
+      ok: false,
+      error: localizedText(
+        `清除所有数据失败：${reason}`,
+        `Could not clear data: ${reason}`,
+      ),
+    };
   }
 });
 
