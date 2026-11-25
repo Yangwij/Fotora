@@ -163,3 +163,36 @@ test("地图照片栏长度随任意窗口自适应，无固定像素上限", ()
     /window\.addEventListener\("resize", \(\) => \{[\s\S]*?scrollMapFilmstripSelection\(kind, \{ immediate: true \}\)/,
   );
 });
+
+test("从地图打开照片时照片栏向下退场，关闭查看器后再从下方推回", () => {
+  const app = read("web/app.js");
+  const css = read("web/styles.css");
+  const open = app.slice(
+    app.indexOf("function openMapPhotoViewer("),
+    app.indexOf("function finishAlbumMapViewerContext("),
+  );
+  const finish = app.slice(
+    app.indexOf("function finishAlbumMapViewerContext("),
+    app.indexOf("function handleAlbumMapMessage("),
+  );
+  const dismiss = app.slice(
+    app.indexOf("function dismissMapFilmstripForViewer("),
+    app.indexOf("function restoreMapFilmstripAfterViewer("),
+  );
+  const restore = app.slice(
+    app.indexOf("function restoreMapFilmstripAfterViewer("),
+    app.indexOf("function mapFilmstripThumbHTML("),
+  );
+
+  assert.match(
+    open,
+    /dismissMapFilmstripForViewer\(kind\);[\s\S]*?viewerMapContext = kind;[\s\S]*?openViewer\(/,
+  );
+  assert.match(finish, /restoreMapFilmstripAfterViewer\(kind\);/);
+  assert.match(dismiss, /playMapFilmstripExit\(nav\);/);
+  assert.match(restore, /playMapFilmstripEntrance\(nav\);/);
+  assert.match(
+    css,
+    /body:has\(> #viewer:not\(\[hidden\]\)\)[\s\S]*?\.map-filmstrip:not\(\.is-filmstrip-exiting\)\s*\{/,
+  );
+});

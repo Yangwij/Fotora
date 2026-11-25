@@ -8934,7 +8934,8 @@ body.resizing .album-map-host iframe {
   visibility: hidden;
   pointer-events: none;
 }
-body:has(> #viewer:not([hidden])) .map-filmstrip {
+/* 打开查看器时让照片栏播完向下退场，再退出可见性；不能在同一帧硬切。 */
+body:has(> #viewer:not([hidden])) .map-filmstrip:not(.is-filmstrip-exiting) {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;

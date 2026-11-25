@@ -7331,6 +7331,28 @@ function playMapFilmstripExit(nav, onFinished = null) {
   nav.addEventListener("animationend", finishOnAnimation);
 }
 
+function dismissMapFilmstripForViewer(kind) {
+  const { nav } = mapFilmstripElements(kind);
+  if (!nav || nav.hidden) return;
+  clearMapFilmstripHideTimer(kind);
+  nav.classList.remove("is-near");
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  playMapFilmstripExit(nav);
+}
+
+function restoreMapFilmstripAfterViewer(kind) {
+  const { nav } = mapFilmstripElements(kind);
+  if (!nav || nav.hidden) return;
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    cancelMapFilmstripExit(nav);
+    nav.classList.remove("is-filmstrip-entering");
+    nav.classList.remove("map-filmstrip-disabled");
+    nav.removeAttribute("aria-hidden");
+    return;
+  }
+  playMapFilmstripEntrance(nav);
+}
+
 function mapFilmstripThumbHTML(item, selected, kind = "album") {
   const aspect = photoAspect(item).toFixed(4);
   const assigning = kind === "album" && state.albumMapAssignMode;
@@ -10016,6 +10038,7 @@ function openMapPhotoViewer(kind, ids) {
   const group = [...wanted].map((id) => byId.get(id)).filter(Boolean);
   if (!group.length) return;
 
+  dismissMapFilmstripForViewer(kind);
   viewerMapRestoreItems = state.items;
   viewerMapContext = kind;
   $("#viewer").classList.add("is-map-photo-viewer");
@@ -10042,6 +10065,7 @@ function finishAlbumMapViewerContext() {
   syncViewerFilmstrip();
   if (kind === "locations") syncLocationsMapSelection();
   else if (kind === "album") syncAlbumMapSelection();
+  restoreMapFilmstripAfterViewer(kind);
 }
 
 function handleAlbumMapMessage(event) {
