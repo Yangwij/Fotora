@@ -50,7 +50,6 @@
     closeButton.hidden = false;
     const closeLabel = assignMode ? "退出位置分配" : "返回相簿";
     closeButton.setAttribute("aria-label", closeLabel);
-    closeButton.title = closeLabel;
   }
   if (searchInput) searchInput.tabIndex = -1;
 
@@ -261,7 +260,6 @@
     searchInput.tabIndex = searchExpanded ? 0 : -1;
     const submit = searchForm.querySelector(".globe-place-search-submit");
     if (submit) {
-      submit.title = searchExpanded ? "搜索" : "搜索地点";
       submit.setAttribute(
         "aria-label",
         searchExpanded ? "搜索" : "展开地点搜索",
@@ -625,7 +623,7 @@
     if (message.type === "album-map:focus-item") {
       globe.focusItem(message.id, {
         zoom: 12,
-        ripple: true,
+        flash: true,
         keepZoom: false,
       });
       return;
@@ -654,6 +652,11 @@
       } else if (!items.length && !targetPoint) {
         showNotice("");
       }
+      return;
+    }
+    if (message.type === "album-map:upsert-items") {
+      const changed = globe.upsertItems(message.items);
+      if (changed && !assignMode) showNotice("");
       return;
     }
     if (message.type === "album-map:animate-fit") {

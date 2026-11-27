@@ -34,10 +34,9 @@ test("内容缓存键把档位单列在尾部，不再混进 parts", () => {
     /isLibrary \|\| isAlbum \? state\.libraryTimelineMode : "",\s*\n\s*\],\s*\n\s*state\.photoZoom,/,
   );
   assert.match(descriptor, /const level = clampGalleryZoom\(zoom\);/);
-  assert.match(
-    descriptor,
-    /key: `\$\{JSON\.stringify\(parts\)\}@z\$\{level\}`, parts, zoom: level/,
-  );
+  assert.match(descriptor, /const baseKey = JSON\.stringify\(parts\);/);
+  assert.match(descriptor, /key: `\$\{baseKey\}@z\$\{level\}`/);
+  assert.match(descriptor, /baseKey,/);
 });
 
 test("就地换档只改写键尾档位，不重算整份签名", () => {
@@ -95,14 +94,10 @@ test("切换视图的每一条路径都把档位收回标准档", () => {
       "async function select(id) {",
       "相簿内容交接",
     ],
+    ["function fallbackToAllAlbums()", "/* 设置页写入全局默认", "回到所有相簿"],
     [
-      "function fallbackToAllAlbums()",
-      "/* 设置页写入全局默认",
-      "回到所有相簿",
-    ],
-    [
-      "async function pickFolder()",
-      "async function switchRoot(rootId)",
+      "async function applyImportedRootState(",
+      "function queueImportedRootActivation(",
       "导入图库根目录",
     ],
     [
@@ -125,10 +120,10 @@ test("切换视图的每一条路径都把档位收回标准档", () => {
   }
 });
 
-test("触控板捏合可在同一手势里连续换档，鼠标滚轮仍是一格一档", () => {
+test("鼠标 Ctrl+滚轮一格一档，触控板捏合可连续跟手", () => {
   const app = read("web/app.js");
 
-  assert.match(app, /const GALLERY_WHEEL_PINCH_REPEAT_PX = 160;/);
+  assert.doesNotMatch(app, /GALLERY_WHEEL_PINCH_REPEAT_PX/);
   assert.match(
     app,
     /const galleryWheelIsPinch = \(event\) =>\s*\n\s*event\.deltaMode === 0 &&\s*\n\s*Math\.abs\(event\.deltaY\) < ALBUM_WHEEL_SMOOTHING\.minNotchPx;/,
@@ -139,25 +134,57 @@ test("触控板捏合可在同一手势里连续换档，鼠标滚轮仍是一�
     "function handleGalleryWheel(",
     '$("#content").addEventListener("wheel", handleGalleryWheel',
   );
-  const locked = sliceBetween(
-    wheel,
-    "if (galleryWheelLocked) {",
-    "clearTimeout(galleryWheelTimer);",
+  const preview = sliceBetween(
+    app,
+    "function updateGalleryWheelZoomPreview(",
+    "function scheduleGalleryWheelZoomCommit(",
   );
 
-  /* 鼠标滚轮：锁定期内直接返回，一次手势只换一档。 */
-  assert.match(locked, /if \(!pinch\) return;/);
-  /* 捏合：继续累计位移，够一段就放行下一档。 */
-  assert.match(locked, /galleryWheelAccum \+= e\.deltaY \* unit;/);
   assert.match(
-    locked,
-    /if \(Math\.abs\(galleryWheelAccum\) < GALLERY_WHEEL_PINCH_REPEAT_PX\) return;/,
+    wheel,
+    /if \(!galleryWheelIsPinch\(e\)\) \{[\s\S]*?galleryWheelMouseLocked = true;[\s\S]*?requestGalleryZoom\(dir, focus\);/,
   );
   assert.match(
-    locked,
-    /requestGalleryZoom\(pinchDir, galleryZoomFocusFromEvent\(e\)\);/,
+    wheel,
+    /if \(galleryZoomBusy \|\| galleryZoomPending !== 0\) return;/,
   );
-  assert.match(locked, /GALLERY_WHEEL_GESTURE_IDLE_MS\);/);
+  assert.match(wheel, /updateGalleryWheelZoomPreview\(/);
+  assert.match(app, /const GALLERY_WHEEL_MOUSE_LOCK_MS = 140;/);
+  assert.match(preview, /GALLERY_WHEEL_PREVIEW_SENSITIVITY \* 1\.7/);
+  assert.match(preview, /applyGalleryWheelZoomPreview\(visualScale\)/);
+  assert.match(preview, /scheduleGalleryWheelZoomCommit\(\)/);
+  assert.doesNotMatch(
+    preview,
+    /else if \(focus\) \{\s*galleryWheelPreviewFocus = focus;/,
+  );
+
+  const target = sliceBetween(
+    app,
+    "function galleryWheelAbsoluteScale()",
+    "function clearGalleryWheelZoomPreview()",
+  );
+  const settle = sliceBetween(
+    app,
+    "function scheduleGalleryWheelZoomCommit(",
+    "async function commitGalleryWheelZoom(",
+  );
+  const commit = sliceBetween(
+    app,
+    "async function commitGalleryWheelZoom(",
+    "function handleGalleryWheel(",
+  );
+  assert.match(
+    target,
+    /GALLERY_LEVEL_SCALE\[clampGalleryZoom\(galleryWheelPreviewBaseLevel\)\]/,
+  );
+  assert.match(target, /Math\.exp\(galleryWheelPreviewLog\)/);
+  assert.match(settle, /void commitGalleryWheelZoom\(\)/);
+  assert.match(
+    commit,
+    /galleryWheelNearestLevel\(galleryWheelAbsoluteScale\(\)\)/,
+  );
+  assert.doesNotMatch(settle, /galleryWheelPreviewBaseLevel \* Math\.exp/);
+  assert.doesNotMatch(commit, /galleryWheelPreviewBaseLevel \* Math\.exp/);
 });
 
 test("图库与相簿共用同一套缩放判定和档位样式", () => {

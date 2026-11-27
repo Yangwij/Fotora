@@ -135,7 +135,8 @@ test("可见菜单、编辑器与照片墙文案包含英文映射", () => {
   for (const pair of [
     ["胶片预览", "Filmstrip Preview"],
     ["布局调整", "Photo Layout"],
-    ["类型过滤", "Filter by File Extension"],
+    ["媒体类型", "Media Type"],
+    ["文件格式", "File Format"],
     ["加入相簿", "Add to Album"],
     ["调整时间", "Adjust Capture Time"],
     ["全部相簿", "All Albums"],

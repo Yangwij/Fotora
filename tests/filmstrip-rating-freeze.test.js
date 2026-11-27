@@ -75,7 +75,7 @@ test("评级标记只同步已经渲染的照片格", () => {
   assert.doesNotMatch(syncRenderedRatingTiles, /\btileAt\(/);
 });
 
-test("胶片预览星级会随当前照片同步并可在原位保存", () => {
+test("胶片预览星级会随当前照片同步，并区分点击与键盘反馈", () => {
   assert.match(
     app,
     /data-filmstrip-rating[\s\S]*role="group" aria-label="照片分类评级"/,
@@ -90,12 +90,12 @@ test("胶片预览星级会随当前照片同步并可在原位保存", () => {
   );
   assert.match(
     saveFilmstripRating,
-    /applyRatingState\(\[item\.id\], nextRating\)[\s\S]*syncFilmstripRating\(item, \{ pop: true \}\)/,
+    /applyRatingState\(\[item\.id\], nextRating\)[\s\S]*syncFilmstripRating\(item, \{ pop \}\)/,
   );
   assert.doesNotMatch(saveFilmstripRating, /setFilmstripMode\(false\)/);
 });
 
-test("胶片预览的分类评级支持数字键并只回弹当前星级", () => {
+test("胶片预览点击评级回弹当前星级，数字键直接更新", () => {
   const keydown = app.slice(
     app.indexOf('document.addEventListener("keydown"'),
     app.indexOf("/* ------------------------------ 启动"),
@@ -107,7 +107,11 @@ test("胶片预览的分类评级支持数字键并只回弹当前星级", () =>
 
   assert.match(
     keydown,
-    /state\.filmstrip && !state\.select[\s\S]*?state\.ratingMode[\s\S]*?\/\^\[0-5\]\$\/\.test\(key\)[\s\S]*?void saveFilmstripRating\(Number\(key\)\)/,
+    /state\.filmstrip && !state\.select[\s\S]*?state\.ratingMode[\s\S]*?\/\^\[0-5\]\$\/\.test\(key\)[\s\S]*?void saveFilmstripRating\(Number\(key\), \{ pop: false \}\)/,
+  );
+  assert.match(
+    app,
+    /void saveFilmstripRating\(Number\(filmstripRatingStar\.dataset\.viewerRating\)\);/,
   );
   assert.match(
     bounce,

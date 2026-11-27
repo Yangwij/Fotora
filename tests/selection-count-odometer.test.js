@@ -24,8 +24,13 @@ test("选择计数把数字包成可滚动的 span，数值变化时滚入", () 
   );
   /* 减少动态时不滚 */
   assert.match(syncSelbar, /prefers-reduced-motion: reduce/);
-  /* 文案本身不变，仍走各语言 / 编号 / 回收站分支 */
-  assert.match(syncSelbar, /已选择 \$\{state\.selected\.size\}/);
+  /* 各语言 / 编号 / 回收站分支共用本地化分组后的计数。 */
+  assert.match(
+    syncSelbar,
+    /const selectedCount = formatCount\(state\.selected\.size\)/,
+  );
+  assert.match(syncSelbar, /已选择 \$\{selectedCount\}/);
+  assert.match(syncSelbar, /\/\[\\d,\]\+/);
   assert.match(syncSelbar, /selected`/);
 });
 

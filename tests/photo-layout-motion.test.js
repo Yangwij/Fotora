@@ -37,7 +37,7 @@ test("照片布局切换使用可取消的 translate / scale FLIP", () => {
   );
 });
 
-test("布局重排保留 240ms，滚轮缩放使用更短的 180ms 过渡", () => {
+test("布局重排保留 240ms，滚轮双档交叉使用 220ms 过渡", () => {
   const app = read("web/app.js");
   const styles = read("web/styles.css");
   const layout = app.slice(
@@ -46,7 +46,7 @@ test("布局重排保留 240ms，滚轮缩放使用更短的 180ms 过渡", () =
   );
 
   assert.match(app, /const PHOTO_GRID_FLIP_MS = 240;/);
-  assert.match(app, /const GALLERY_ZOOM_MS = 180;/);
+  assert.match(app, /const GALLERY_ZOOM_MS = 220;/);
   assert.match(app, /stopAllPhotoGridFlips\(\)/);
   assert.match(
     layout,
@@ -99,8 +99,9 @@ test("照片布局动效尊重减少动态并提供即时切换样式", () => {
   );
   assert.match(
     app,
-    /const reducedMotion = window\.matchMedia\([\s\S]*?if \(!reducedMotion\) \{[\s\S]*?animateGalleryLayoutPulse\(grids, focus\)/,
+    /reducedMotion\s*\? \[\{ opacity: 1 \}, \{ opacity: 0 \}\]/,
   );
+  assert.match(app, /playGalleryZoomCrossfade\(crossfade, fromLevel, level\)/);
   assert.match(
     app,
     /preserveGalleryZoomFocus\(focus, before, fromLevel, level\)/,
@@ -163,7 +164,7 @@ test("相簿栏重排保持视口照片并避免底部缩略图闪空", () => {
   );
   assert.match(
     app,
-    /for \(const key of target\.entering \|\| \[\]\)[\s\S]*?opacity: 0,[\s\S]*?opacity: 1,/,
+    /for \(const key of target\.entering \|\| \[\]\)[\s\S]*?opacity: 0,[\s\S]*?opacity: 0,[\s\S]*?offset: 0\.72/,
   );
   assert.match(
     unload,

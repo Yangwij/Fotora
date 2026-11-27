@@ -23,6 +23,11 @@
   const defaultRecipe = () => ({
     version: 1,
     geometry: {
+      quarterTurns: 0,
+      mirrorX: false,
+      angle: 0,
+      perspectiveH: 0,
+      perspectiveV: 0,
       crop: { x: 0, y: 0, w: 1, h: 1 },
       aspect: "free",
     },
@@ -38,6 +43,13 @@
       w: clamp(geometry.crop?.w, 0.02, 1 - x, 1),
       h: clamp(geometry.crop?.h, 0.02, 1 - y, 1),
     };
+    result.geometry.quarterTurns = Math.round(
+      clamp(geometry.quarterTurns, 0, 3, 0),
+    );
+    result.geometry.mirrorX = Boolean(geometry.mirrorX);
+    result.geometry.angle = clamp(geometry.angle, -45, 45, 0);
+    result.geometry.perspectiveH = clamp(geometry.perspectiveH, -1, 1, 0);
+    result.geometry.perspectiveV = clamp(geometry.perspectiveV, -1, 1, 0);
     const aspect =
       typeof geometry.aspect === "string" ? geometry.aspect.slice(0, 24) : "";
     result.geometry.aspect = RATIOS.some(([key]) => key === aspect)
@@ -46,7 +58,113 @@
     return result;
   }
   const recipeEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  function hasGeometry(recipe) {
+
+  function normalizedQuarterTurns(value) {
+    return ((Math.round(Number(value) || 0) % 4) + 4) % 4;
+  }
+
+  function geometrySourceAspect(geometry, sourceAspect) {
+    return normalizedQuarterTurns(geometry?.quarterTurns) % 2
+      ? 1 / Math.max(0.0001, sourceAspect)
+      : sourceAspect;
+  }
+
+  function geometryOutputAspect(geometry, sourceAspect) {
+    const rotatedAspect = geometrySourceAspect(geometry, sourceAspect);
+    const radians = (clamp(geometry?.angle, -45, 45, 0) * Math.PI) / 180;
+    const cosine = Math.abs(Math.cos(radians));
+    const sine = Math.abs(Math.sin(radians));
+    return (
+      (rotatedAspect * cosine + sine) /
+      Math.max(0.0001, rotatedAspect * sine + cosine)
+    );
+  }
+
+  /* 把照片编辑器的几何滤镜链反过来采样：透视 → 拉直 → 镜像 → 90° 旋转。
+     参数与 server/edits.js 的 FFmpeg 滤镜保持同一坐标系和方向。 */
+  function createGeometryMapper(geometry, sourceAspect) {
+    const turns = normalizedQuarterTurns(geometry?.quarterTurns);
+    const rotatedAspect = geometrySourceAspect(geometry, sourceAspect);
+    const radians = (clamp(geometry?.angle, -45, 45, 0) * Math.PI) / 180;
+    const cosine = Math.cos(radians);
+    const sine = Math.sin(radians);
+    const perspectiveH = Math.tan(
+      (clamp(geometry?.perspectiveH, -1, 1, 0) * Math.PI) / 6,
+    );
+    const perspectiveV = Math.tan(
+      (clamp(geometry?.perspectiveV, -1, 1, 0) * Math.PI) / 6,
+    );
+    const project = ([x, y]) => {
+      const denominator = 1 - perspectiveH * x - perspectiveV * y;
+      return {
+        x: x / Math.max(0.08, denominator),
+        y: y / Math.max(0.08, denominator),
+      };
+    };
+    const corners = [
+      project([-0.5, -0.5]),
+      project([0.5, -0.5]),
+      project([-0.5, 0.5]),
+      project([0.5, 0.5]),
+    ];
+    const extent = Math.max(
+      ...corners.flatMap((point) => [Math.abs(point.x), Math.abs(point.y)]),
+      0.5,
+    );
+    const perspectiveScale = 0.5 / extent;
+    const mirrored = Boolean(geometry?.mirrorX);
+
+    return (u, v, point) => {
+      const destX = u - 0.5;
+      const destY = v - 0.5;
+      const perspectiveDenominator =
+        perspectiveScale + perspectiveH * destX + perspectiveV * destY;
+      if (perspectiveDenominator <= 0.0001) return false;
+      const normalizedX = destX / perspectiveDenominator;
+      const normalizedY = destY / perspectiveDenominator;
+      if (
+        normalizedX < -0.5000001 ||
+        normalizedX > 0.5000001 ||
+        normalizedY < -0.5000001 ||
+        normalizedY > 0.5000001
+      ) {
+        return false;
+      }
+
+      const rotatedX = normalizedX * rotatedAspect;
+      const rotatedY = normalizedY;
+      const sourceX = rotatedX * cosine + rotatedY * sine;
+      const sourceY = -rotatedX * sine + rotatedY * cosine;
+      if (
+        Math.abs(sourceX) > rotatedAspect / 2 + 0.000001 ||
+        Math.abs(sourceY) > 0.5 + 0.000001
+      ) {
+        return false;
+      }
+
+      let sourceU = sourceX / rotatedAspect + 0.5;
+      let sourceV = sourceY + 0.5;
+      if (mirrored) sourceU = 1 - sourceU;
+      for (let turn = 0; turn < turns; turn += 1) {
+        [sourceU, sourceV] = [1 - sourceV, sourceU];
+      }
+      point.u = clamp(sourceU, 0, 1, 0);
+      point.v = clamp(sourceV, 0, 1, 0);
+      return true;
+    };
+  }
+
+  function hasTransformGeometry(geometry) {
+    return Boolean(
+      Number(geometry?.quarterTurns) ||
+      geometry?.mirrorX ||
+      Math.abs(Number(geometry?.angle) || 0) > 0.001 ||
+      Math.abs(Number(geometry?.perspectiveH) || 0) > 0.001 ||
+      Math.abs(Number(geometry?.perspectiveV) || 0) > 0.001,
+    );
+  }
+
+  function hasCropGeometry(recipe) {
     const g = recipe.geometry;
     const c = g.crop;
     return Boolean(
@@ -56,6 +174,11 @@
       Math.abs(c.w - 1) > 0.0005 ||
       Math.abs(c.h - 1) > 0.0005,
     );
+  }
+
+  function hasGeometry(recipe) {
+    const g = recipe.geometry;
+    return hasCropGeometry(recipe) || hasTransformGeometry(g);
   }
   function cropRecipeFromViewport(
     viewport,
@@ -143,6 +266,12 @@
         <button class="pe-icon-button" data-pe-redo type="button" aria-label="重做">${icon("redo")}</button>
         <button class="pe-reset-crop" data-pe-reset-crop type="button">还原</button>
       </div>
+      <div class="pe-mode-switch" role="tablist" aria-label="编辑工具">
+        <button data-pe-mode="crop" type="button" role="tab"
+          aria-selected="true">裁剪</button>
+        <button data-pe-mode="geometry" type="button" role="tab"
+          aria-selected="false">几何</button>
+      </div>
       <div class="pe-head-right">
         <button class="pe-video-cover-button" data-pe-reset-video-cover type="button" hidden>恢复默认封面</button>
         <button class="pe-video-cover-button" data-pe-set-video-cover type="button" hidden>设为视频封面</button>
@@ -187,6 +316,25 @@
             </button>
           </div>
         </div>
+      </aside>
+      <aside class="pe-geometry-toolbar" data-pe-geometry-rail
+        aria-label="几何调整" hidden>
+        <div class="pe-geometry-actions">
+          <button class="pe-geometry-button" data-pe-rotate="-1"
+            type="button" aria-label="逆时针旋转">${icon("rotate")}</button>
+          <button class="pe-geometry-button" data-pe-rotate="1"
+            type="button" aria-label="顺时针旋转">${icon("rotate")}</button>
+          <button class="pe-geometry-button" data-pe-mirror
+            type="button" aria-label="水平镜像" aria-pressed="false">${icon("flip")}</button>
+        </div>
+        <label class="pe-straighten-control">
+          <span>拉直</span>
+          <input data-pe-angle type="range" min="-45" max="45" step="0.5"
+            value="0" aria-label="拉直角度">
+          <output data-pe-angle-output>0°</output>
+        </label>
+        <button class="pe-geometry-reset" data-pe-reset-geometry
+          type="button">重置几何</button>
       </aside>
     </div>
     <div class="pe-video-timeline" data-pe-video-timeline hidden>
@@ -255,6 +403,7 @@
       this.titleDragSurface = host.querySelector("[data-pe-title-drag]");
       this.shell = host.querySelector("[data-pe-image-shell]");
       this.cropRail = host.querySelector("[data-pe-crop-rail]");
+      this.geometryRail = host.querySelector("[data-pe-geometry-rail]");
       this.canvas = host.querySelector("[data-pe-canvas]");
       this.ctx = this.canvas.getContext("2d", { willReadFrequently: true });
       this.pendingCanvasWidth = 0;
@@ -263,6 +412,8 @@
       this.cropFrame = host.querySelector("[data-pe-crop-frame]");
       this.aspectOrientation = host.querySelector(".pe-aspect-orientation");
       this.cropList = host.querySelector(".pe-crop-controls");
+      this.angleInput = host.querySelector("[data-pe-angle]");
+      this.angleOutput = host.querySelector("[data-pe-angle-output]");
       this.doneButton = host.querySelector("[data-pe-done]");
       this.setVideoCoverButton = host.querySelector(
         "[data-pe-set-video-cover]",
@@ -350,12 +501,65 @@
       this.resetCropButton.addEventListener("click", () => {
         this.mutate(() => {
           const g = this.recipe.geometry;
-          g.crop = { x: 0, y: 0, w: 1, h: 1 };
-          g.aspect = "free";
+          if (this.activeMode === "geometry") {
+            g.quarterTurns = 0;
+            g.mirrorX = false;
+            g.angle = 0;
+            g.perspectiveH = 0;
+            g.perspectiveV = 0;
+          } else {
+            g.crop = { x: 0, y: 0, w: 1, h: 1 };
+            g.aspect = "free";
+          }
         });
         this.resetEditorZoom();
         this.syncMode();
         this.layout();
+      });
+      this.el.querySelectorAll("[data-pe-mode]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const mode =
+            button.dataset.peMode === "geometry" ? "geometry" : "crop";
+          if (mode === this.activeMode) return;
+          this.activeMode = mode;
+          this.resetEditorZoom();
+          this.syncMode();
+          this.layout();
+        });
+      });
+      this.el.querySelectorAll("[data-pe-rotate]").forEach((button) => {
+        button.addEventListener("click", () => {
+          this.rotateQuarterTurn(Number(button.dataset.peRotate) || 0);
+        });
+      });
+      this.el
+        .querySelector("[data-pe-mirror]")
+        .addEventListener("click", () => {
+          this.toggleMirror();
+        });
+      this.el
+        .querySelector("[data-pe-reset-geometry]")
+        .addEventListener("click", () => {
+          this.resetGeometryTransforms();
+        });
+      this.angleInput.addEventListener("pointerdown", () => {
+        this.gestureStart = clone(this.recipe);
+      });
+      this.angleInput.addEventListener("input", () => {
+        if (!this.gestureStart) this.gestureStart = clone(this.recipe);
+        this.recipe.geometry.angle = clamp(
+          Number(this.angleInput.value),
+          -45,
+          45,
+          0,
+        );
+        this.syncGeometryPanel();
+        this.syncHeader();
+        this.layout();
+      });
+      this.angleInput.addEventListener("change", () => {
+        this.recordGesture();
+        this.syncHeader();
       });
       this.setVideoCoverButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -1127,6 +1331,7 @@
       });
       this.syncHeader();
       this.syncControlSelection();
+      this.syncGeometryPanel();
       this.layout();
     }
 
@@ -1215,8 +1420,11 @@
         this.doneButton.disabled = true;
         this.doneButton.classList.remove("is-revert");
       }
-      const cropDirty = hasGeometry(this.recipe);
-      this.resetCropButton.disabled = !cropDirty;
+      const resetDirty =
+        this.activeMode === "geometry"
+          ? hasTransformGeometry(this.recipe.geometry)
+          : hasCropGeometry(this.recipe);
+      this.resetCropButton.disabled = !resetDirty;
       this.resetCropButton.hidden = false;
       this.syncVideoCoverControls();
       this.syncUndoButtons();
@@ -1229,13 +1437,78 @@
         this.redoStack.length === 0;
     }
 
+    rotateQuarterTurn(delta) {
+      if (!delta) return;
+      this.mutate(() => {
+        const geometry = this.recipe.geometry;
+        geometry.quarterTurns = normalizedQuarterTurns(
+          geometry.quarterTurns - delta,
+        );
+      });
+      this.resetEditorZoom();
+      this.layout();
+    }
+
+    toggleMirror() {
+      this.mutate(() => {
+        const geometry = this.recipe.geometry;
+        geometry.mirrorX = !geometry.mirrorX;
+      });
+      this.resetEditorZoom();
+      this.layout();
+    }
+
+    resetGeometryTransforms() {
+      this.mutate(() => {
+        const geometry = this.recipe.geometry;
+        geometry.quarterTurns = 0;
+        geometry.mirrorX = false;
+        geometry.angle = 0;
+        geometry.perspectiveH = 0;
+        geometry.perspectiveV = 0;
+      });
+      this.resetEditorZoom();
+      this.layout();
+    }
+
+    syncGeometryPanel() {
+      const geometry = this.recipe.geometry;
+      const mirror = this.el.querySelector("[data-pe-mirror]");
+      mirror.classList.toggle("is-active", Boolean(geometry.mirrorX));
+      mirror.setAttribute("aria-pressed", String(Boolean(geometry.mirrorX)));
+      const angle = clamp(geometry.angle, -45, 45, 0);
+      this.angleInput.value = String(angle);
+      this.angleOutput.textContent = `${Number(
+        angle.toFixed(angle % 1 ? 1 : 0),
+      )}°`;
+      this.angleInput.setAttribute("aria-valuetext", `${angle} 度`);
+      this.el
+        .querySelectorAll("[data-pe-rotate]")
+        .forEach((button) =>
+          button.classList.toggle(
+            "is-active",
+            Number(geometry.quarterTurns) % 4 !== 0,
+          ),
+        );
+    }
+
     syncMode({ deferRender = false } = {}) {
-      this.el.classList.add("is-crop-mode");
-      this.cropRail.hidden = false;
-      this.cropOverlay.hidden = false;
+      const cropMode = this.activeMode !== "geometry";
+      this.el.classList.toggle("is-crop-mode", cropMode);
+      this.el.classList.toggle("is-geometry-mode", !cropMode);
+      this.cropRail.hidden = !cropMode;
+      this.cropOverlay.hidden = !cropMode;
+      this.geometryRail.hidden = cropMode;
+      this.el.querySelectorAll("[data-pe-mode]").forEach((button) => {
+        button.setAttribute(
+          "aria-selected",
+          String(button.dataset.peMode === (cropMode ? "crop" : "geometry")),
+        );
+      });
       this.syncHeader();
       this.syncControlSelection();
       this.syncCropPanel();
+      this.syncGeometryPanel();
       if (!deferRender) this.scheduleRender();
     }
 
@@ -1272,6 +1545,7 @@
       this.redoStack.length = 0;
       this.syncHeader();
       this.syncCropPanel();
+      this.syncGeometryPanel();
       this.layout();
     }
 
@@ -1282,6 +1556,7 @@
       this.resetEditorZoom();
       this.syncHeader();
       this.syncCropPanel();
+      this.syncGeometryPanel();
       this.layout();
     }
 
@@ -1292,6 +1567,7 @@
       this.resetEditorZoom();
       this.syncHeader();
       this.syncCropPanel();
+      this.syncGeometryPanel();
       this.layout();
     }
 
@@ -1602,7 +1878,10 @@
       if (aspect === "square") return 1;
       let ratio;
       if (aspect === "original") {
-        ratio = this.source.width / Math.max(1, this.source.height);
+        ratio = geometryOutputAspect(
+          this.recipe.geometry,
+          this.source.width / Math.max(1, this.source.height),
+        );
       } else {
         const [w, h] = aspect.split(":").map(Number);
         ratio = w / h;
@@ -1634,7 +1913,9 @@
       const editorRect = this.el.getBoundingClientRect();
       const horizontalInset = 18;
       const bottomInset = 74;
-      const toolbarHeight = this.cropRail.offsetHeight || 52;
+      const activeRail =
+        this.activeMode === "geometry" ? this.geometryRail : this.cropRail;
+      const toolbarHeight = activeRail.offsetHeight || 52;
       const stageTopGlobal = workspaceRect.top + toolbarHeight + 10;
       const stageBottomGlobal = workspaceRect.bottom - bottomInset;
       const headerHeight = Math.max(0, workspaceRect.top - editorRect.top);
@@ -1656,7 +1937,10 @@
       this.stage.style.right = "auto";
       this.stage.style.bottom = "auto";
       const stageRect = this.stage.getBoundingClientRect();
-      const displayAspect = this.source.width / Math.max(1, this.source.height);
+      const displayAspect = geometryOutputAspect(
+        this.recipe.geometry,
+        this.source.width / Math.max(1, this.source.height),
+      );
       const photoSpaceW = Math.max(120, stageRect.width);
       const photoSpaceH = Math.max(100, stageRect.height);
       let canvasWidth = photoSpaceW;
@@ -1696,8 +1980,8 @@
       this.shell.style.left = `${Math.round((stageRect.width - shellWidth) / 2)}px`;
       this.shell.style.top = `${Math.round((stageRect.height - shellHeight) / 2)}px`;
       this.applyEditorZoom();
-      this.cropOverlay.hidden = false;
-      this.layoutCropOverlay();
+      this.cropOverlay.hidden = this.activeMode !== "crop";
+      if (this.activeMode === "crop") this.layoutCropOverlay();
       this.syncRatioButtons();
       if (!deferRender) this.render();
     }
@@ -1889,6 +2173,7 @@
         (event) => {
           if (
             !this.open ||
+            this.activeMode !== "crop" ||
             !(event.target instanceof Element) ||
             !event.target.closest("[data-pe-image-shell]")
           )
@@ -1906,7 +2191,8 @@
       );
 
       this.canvas.addEventListener("pointerdown", (event) => {
-        if (!this.open || event.button !== 0) return;
+        if (!this.open || this.activeMode !== "crop" || event.button !== 0)
+          return;
         event.preventDefault();
         if (this.wheelGestureTimer) {
           clearTimeout(this.wheelGestureTimer);
@@ -2008,16 +2294,35 @@
       const output = this.ctx.createImageData(renderWidth, renderHeight);
       const destination = output.data;
       const sample = { r: 0, g: 0, b: 0, a: 255 };
+      const mapped = { u: 0, v: 0 };
+      const mapGeometry = createGeometryMapper(
+        this.recipe.geometry,
+        sourceWidth / Math.max(1, sourceHeight),
+      );
       for (let y = 0; y < renderHeight; y += 1) {
         const v = (y + 0.5) / renderHeight;
         for (let x = 0; x < renderWidth; x += 1) {
           const u = (x + 0.5) / renderWidth;
-          bilerp(sourceData, sourceWidth, sourceHeight, u, v, sample);
           const index = (y * renderWidth + x) * 4;
-          destination[index] = sample.r;
-          destination[index + 1] = sample.g;
-          destination[index + 2] = sample.b;
-          destination[index + 3] = clamp(sample.a, 0, 255, 255);
+          if (mapGeometry(u, v, mapped)) {
+            bilerp(
+              sourceData,
+              sourceWidth,
+              sourceHeight,
+              mapped.u,
+              mapped.v,
+              sample,
+            );
+            destination[index] = sample.r;
+            destination[index + 1] = sample.g;
+            destination[index + 2] = sample.b;
+            destination[index + 3] = clamp(sample.a, 0, 255, 255);
+          } else {
+            destination[index] = 0;
+            destination[index + 1] = 0;
+            destination[index + 2] = 0;
+            destination[index + 3] = 255;
+          }
         }
       }
       if (renderWidth === width && renderHeight === height && !targetChanged) {

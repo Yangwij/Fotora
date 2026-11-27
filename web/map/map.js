@@ -683,7 +683,6 @@
     typeToggle.classList.toggle("is-satellite", satellite);
     const label = satellite ? "切换到普通地图" : "切换到卫星地图";
     typeToggle.setAttribute("aria-label", label);
-    typeToggle.title = label;
   }
 
   function applyStyleKindToLayers() {

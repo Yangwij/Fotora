@@ -11,7 +11,7 @@ const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 test("原始比例保留固定方格槽位并在槽位内保持照片自身比例", () => {
   assert.match(
     app,
-    /function effectivePhotoLayoutMode\(\)\s*\{\s*const style = activePhotoStyle\(\);[\s\S]*style === "original" \|\| style === "square"[\s\S]*"tile"[\s\S]*: style;/,
+    /function effectivePhotoLayoutMode\(\)\s*\{\s*if \(state\.photoZoom < GALLERY_STANDARD_ZOOM\) return "tile";\s*const style = activePhotoStyle\(\);[\s\S]*style === "original" \|\| style === "square"[\s\S]*"tile"[\s\S]*: style;/,
   );
   assert.match(
     app,

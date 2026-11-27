@@ -95,6 +95,10 @@
   --menu-glass-backdrop: saturate(180%) blur(24px);
   --menu-glass-shadow:
     0 10px 40px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+  /* 小控件沿用菜单的玻璃填充和模糊，只收低阴影高度，避免按钮出现大块光晕。 */
+  --menu-control-glass-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.08),
+    0 0 0 0.5px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
   /* 添加项目弹窗底部常驻白边使用实色，避免滚动照片从下面透出。 */
   --library-picker-edge-bg: #fafafc;
   /* 筛选二级菜单要盖住下面被模糊的「照片墙 / 显示地图」，
@@ -500,6 +504,11 @@ html.hide-viewer-frame {
   display: none;
 }
 
+/* 渲染进程恢复时窗口已经显示过内容，不能再把品牌启动页当首屏播放。 */
+html.app-recovering .startup-screen {
+  display: none;
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -530,14 +539,14 @@ input {
 
 .app.photo-wall-backdrop-animating {
   transform-origin: 50% 50%;
-  will-change: transform, filter;
-  transition:
-    transform 560ms cubic-bezier(0.22, 0.72, 0.24, 1),
-    filter 560ms cubic-bezier(0.22, 0.72, 0.24, 1);
+  will-change: transform;
+  /* 只让合成属性逐帧运动。模糊在启动时一次落到稳定值，
+     不再和 iframe / WebGL 首帧争抢整窗重绘。 */
+  transition: transform 560ms cubic-bezier(0.22, 0.72, 0.24, 1);
 }
 
 .app.photo-wall-backdrop-animating.photo-wall-backdrop-restoring {
-  transition-duration: 650ms;
+  transition-duration: 560ms;
   transition-timing-function: linear;
 }
 
@@ -820,17 +829,16 @@ html.sidebar-rail-is-collapsed .sidebar-rail-visual {
 html.sidebar-rail-is-collapsed .sidebar-rail-overlay > svg {
   transform: scale(0.84);
 }
-/* 地点地图上的相簿栏按钮与右上角地图控件统一为圆形；
-   圆形底盘变大后，里面的相簿图标也恢复完整尺寸。 */
+/* 地点地图上的相簿栏按钮与右上角地图控件统一为圆形。 */
 html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
     .sidebar-hover-peek-open
-  )
+  ):not(.sidebar-hover-peek-closing)
   .sidebar-collapse-btn.sidebar-rail-overlay {
   top: calc(var(--sidebar-rail-top) + 14px);
 }
 html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
     .sidebar-hover-peek-open
-  )
+  ):not(.sidebar-hover-peek-closing)
   .sidebar-rail-visual {
   width: 44px;
   height: 44px;
@@ -840,18 +848,18 @@ html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
 }
 html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
     .sidebar-hover-peek-open
-  )
+  ):not(.sidebar-hover-peek-closing)
   .sidebar-rail-overlay
   > svg {
-  width: 28px;
-  height: 28px;
+  width: 21px;
+  height: 21px;
   transform: none;
 }
 /* 相簿地图收起侧栏后，收起键与地图退出键形成和右上角相同的按钮组：
    左侧留 14px，按钮间距 8px；图标从蓝色渐变为退出键的黑色。 */
 html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
     .sidebar-hover-peek-open
-  )
+  ):not(.sidebar-hover-peek-closing)
   body.album-map-view-mode
   .sidebar-collapse-btn.sidebar-rail-overlay {
   left: calc(var(--window-frame) + 12.5px);
@@ -2048,7 +2056,7 @@ html.transparent-titlebar.sidebar-rail-is-collapsed .sidebar-rail-visual {
 }
 html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
     .sidebar-hover-peek-open
-  )
+  ):not(.sidebar-hover-peek-closing)
   .sidebar-rail-visual {
   opacity: 1;
   background: color-mix(in srgb, var(--main-bg) 28%, transparent) !important;
@@ -2859,6 +2867,22 @@ html.blur-titlebar:not(.transparent-titlebar)
   user-select: none;
 }
 
+/* 换档时旧画面是一帧冻结的视觉底片。只让最外层的 transform / opacity
+   由 WAAPI 驱动，内部格子不再重复播放骨架、淡入或 FLIP。 */
+.gallery-zoom-crossfade-snapshot {
+  pointer-events: none;
+  isolation: isolate;
+  background: var(--main-bg);
+  transform-origin: 50% 50%;
+}
+
+.gallery-zoom-crossfade-snapshot .photo-grid .tile,
+.gallery-zoom-crossfade-snapshot .photo-grid .tile *,
+.gallery-zoom-crossfade-snapshot .photo-grid .tile .crop::before {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* 空图库切换时沿用同一台全局时钟的加载器继续播放；
    旧内容快照里不要再复制一份，否则会短暂出现两个加载器。 */
 .content-crossfade-snapshot .empty-state.welcome {
@@ -2954,6 +2978,51 @@ html.sidebar-hover-expand #sidebarRailBtn .sidebar-rail-visual {
   box-shadow: none !important;
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+}
+/* 地图收起侧栏后，展开按钮固定使用地图三颗圆钮的控制底材。
+   这里需要 ID 选择器覆盖上面的悬停展开透明规则，但不再响应鼠标距离。 */
+html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
+    .sidebar-hover-peek-open
+  ):not(.sidebar-hover-peek-closing)
+  #sidebarRailBtn
+  .sidebar-rail-visual {
+  background: var(
+    --map-rail-control-background,
+    color-mix(in srgb, var(--main-bg) 28%, transparent)
+  ) !important;
+  border: 0 !important;
+  -webkit-backdrop-filter: var(
+    --map-rail-control-backdrop,
+    blur(12px) saturate(135%)
+  ) !important;
+  backdrop-filter: var(
+    --map-rail-control-backdrop,
+    blur(12px) saturate(135%)
+  ) !important;
+  box-shadow: var(
+    --map-rail-control-shadow,
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent)
+  ) !important;
+}
+html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
+    .sidebar-hover-peek-open
+  ):not(.sidebar-hover-peek-closing)
+  #sidebarRailBtn {
+  color: var(--map-rail-control-color, var(--text)) !important;
+}
+html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
+    .sidebar-hover-peek-open
+  ):not(.sidebar-hover-peek-closing).map-satellite-control-material
+  #sidebarRailBtn
+  .sidebar-rail-visual {
+  background: rgba(18, 26, 34, 0.44) !important;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.26) !important;
+}
+html.locations-map-titlebar-hidden.sidebar-rail-is-collapsed:not(
+    .sidebar-hover-peek-open
+  ):not(.sidebar-hover-peek-closing).map-satellite-control-material
+  #sidebarRailBtn {
+  color: #f8fafc !important;
 }
 /* 侧栏菜单沿用标题栏的抬升层级，但悬停相簿栏仍是浮层：
    标题栏不能盖住相簿栏标题与按钮；切换图库和设置菜单本身保持在其上方。 */
@@ -3454,6 +3523,8 @@ body.album-sorting .nav-item {
   margin-top: 1px;
   font-size: 16px;
   color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* ---------- 相簿内部的照片网格 ---------- */
@@ -3483,21 +3554,21 @@ body.album-sorting .nav-item {
   cursor: pointer;
 }
 .photo-grid.gallery-zoom-1 {
-  --photo-tile-size: calc(var(--photo-tile-base) * 0.16);
+  --photo-tile-size: calc(var(--photo-tile-base) * 0.32);
   --photo-grid-current-gap: 0px;
   --gallery-tile-radius: 0px;
   --gallery-seam-bleed: 0.5px;
   --gallery-chrome-scale: 0.36;
 }
 .photo-grid.gallery-zoom-2 {
-  --photo-tile-size: calc(var(--photo-tile-base) * 0.3);
+  --photo-tile-size: calc(var(--photo-tile-base) * 0.46);
   --photo-grid-current-gap: 0px;
   --gallery-tile-radius: 0px;
   --gallery-seam-bleed: 0.5px;
   --gallery-chrome-scale: 0.58;
 }
 .photo-grid.gallery-zoom-3 {
-  --photo-tile-size: calc(var(--photo-tile-base) * 0.52);
+  --photo-tile-size: calc(var(--photo-tile-base) * 0.64);
   --photo-grid-current-gap: 0px;
   --gallery-tile-radius: 0px;
   --gallery-seam-bleed: 0.5px;
@@ -3716,7 +3787,9 @@ body.photo-wall-mode .toolbar {
   color-scheme: light dark;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 150ms ease-out;
+  /* reveal-start 只会在 iframe 已经完成一次稳定绘制后到达。
+     此时直接切换可见性，避免透明 iframe 与载入层同时淡入淡出。 */
+  transition: none;
 }
 
 html.photo-wall-glass-border .photo-wall-frame {
@@ -3744,10 +3817,8 @@ html.photo-wall-glass-border .photo-wall-frame {
   display: grid;
   place-items: center;
   color: var(--text-2);
-  background: color-mix(in srgb, var(--main-bg) 84%, transparent);
+  background: color-mix(in srgb, var(--main-bg) 96%, transparent);
   corner-shape: squircle;
-  -webkit-backdrop-filter: blur(20px) saturate(125%);
-  backdrop-filter: blur(20px) saturate(125%);
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -3984,7 +4055,16 @@ body.photo-wall-exiting #sidebarRailBtn {
     opacity var(--motion-duration-enter) var(--ease-out),
     transform var(--photo-layout-motion-duration)
       var(--photo-layout-motion-ease);
+  z-index: 0;
   pointer-events: none;
+}
+.photo-grid .tile.has-thumb-l0 .crop::before {
+  opacity: 0;
+  animation: none;
+}
+.photo-grid .tile.has-thumb-atlas .crop::before {
+  opacity: 0;
+  animation: none;
 }
 .photo-grid .tile.is-media-ready .crop::before,
 .photo-grid .tile.failed .crop::before,
@@ -3992,14 +4072,85 @@ body.photo-wall-exiting #sidebarRailBtn {
   opacity: 0;
   animation: none;
 }
-.photo-grid .tile .crop > img:not(.gallery-full-overlay) {
+.photo-grid
+  .tile
+  .crop
+  > img:not(.gallery-full-overlay):not(.gallery-thumb-l0) {
+  z-index: 3;
   opacity: 0;
   transition:
     opacity var(--motion-duration-enter) var(--ease-out),
     transform var(--photo-layout-motion-duration)
       var(--photo-layout-motion-ease);
 }
-.photo-grid .tile.is-media-ready .crop > img:not(.gallery-full-overlay) {
+.photo-grid
+  .tile.is-media-ready
+  .crop
+  > img:not(.gallery-full-overlay):not(.gallery-thumb-l0) {
+  opacity: 1;
+}
+/* 图集优先铺第一帧：一页覆盖几十张照片，减少大量单独 L0 连接。
+   单张 L0 保持在上一层；它先到就直接显示，图集后到也不会闪动。 */
+.photo-grid .tile .crop > .gallery-thumb-atlas {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  z-index: 1;
+  width: min(100%, calc(100% * var(--ar, 1)));
+  height: min(100%, calc(100% / var(--ar, 1)));
+  border-radius: var(--gallery-tile-radius);
+  background-position: var(--atlas-x, 0%) var(--atlas-y, 0%);
+  background-repeat: no-repeat;
+  background-size: 800% 800%;
+  opacity: 0;
+  filter: blur(9px) saturate(0.94);
+  transform: scale(calc(var(--cs, 1) * 1.045));
+  transition:
+    opacity 90ms linear,
+    transform var(--photo-layout-motion-duration)
+      var(--photo-layout-motion-ease);
+  pointer-events: none;
+}
+.photo-grid .tile.has-thumb-atlas .crop > .gallery-thumb-atlas {
+  opacity: 1;
+}
+/* 单张 L0 是图集之外的回退路径：真实画面立即出现，高清层最后覆盖。 */
+.photo-grid .tile .crop > img.gallery-thumb-l0 {
+  z-index: 2;
+  opacity: 0;
+  filter: blur(9px) saturate(0.94);
+  transform: scale(calc(var(--cs, 1) * 1.045));
+  transition:
+    opacity 90ms linear,
+    transform var(--photo-layout-motion-duration)
+      var(--photo-layout-motion-ease);
+  pointer-events: none;
+}
+.photo-grid .tile.has-thumb-l0 .crop > img.gallery-thumb-l0 {
+  opacity: 1;
+}
+/* 小档一屏有几百个格子，再给每个 L0 / 图集层叠 blur 会让合成器持续做
+   大面积离屏模糊。低清图本身已经足够软，小档直接去掉滤镜换滚动帧率。 */
+.photo-grid.gallery-zoom-1 .crop > .gallery-thumb-atlas,
+.photo-grid.gallery-zoom-2 .crop > .gallery-thumb-atlas,
+.photo-grid.gallery-zoom-3 .crop > .gallery-thumb-atlas,
+.photo-grid.gallery-zoom-1 .crop > img.gallery-thumb-l0,
+.photo-grid.gallery-zoom-2 .crop > img.gallery-thumb-l0,
+.photo-grid.gallery-zoom-3 .crop > img.gallery-thumb-l0 {
+  filter: none;
+}
+/* 网格图完成后，低清层已经不可见。显式收起并去掉滤镜，
+   不让它们继续占着独立合成层。 */
+.photo-grid .tile.is-media-ready .crop > .gallery-thumb-atlas,
+.photo-grid .tile.is-media-ready .crop > img.gallery-thumb-l0 {
+  opacity: 0;
+  filter: none;
+  transform: none;
+}
+.photo-grid.gallery-zoom-1
+  .tile.is-media-ready:not(.has-thumb-atlas)
+  .crop
+  > img.gallery-thumb-l0 {
   opacity: 1;
 }
 /* 已经上过屏的缩略图：磁盘、HTTP 缓存、解码池全是热的，画面基本当帧就到。
@@ -4012,7 +4163,10 @@ body.photo-wall-exiting #sidebarRailBtn {
   transition: transform var(--photo-layout-motion-duration)
     var(--photo-layout-motion-ease);
 }
-.photo-grid .tile.is-thumb-warm .crop > img:not(.gallery-full-overlay) {
+.photo-grid
+  .tile.is-thumb-warm
+  .crop
+  > img:not(.gallery-full-overlay):not(.gallery-thumb-l0) {
   transition: transform var(--photo-layout-motion-duration)
     var(--photo-layout-motion-ease);
 }
@@ -4050,7 +4204,7 @@ body.photo-wall-exiting #sidebarRailBtn {
 }
 /* 高清层和底层照片使用完全相同的排版；只负责在原图解码后淡入。 */
 .photo-grid .tile img.gallery-full-overlay {
-  z-index: 2;
+  z-index: 4;
   opacity: 0;
   pointer-events: none;
   transition: opacity 160ms ease;
@@ -4394,11 +4548,20 @@ body.viewer-hover-pinned
   height: 100%;
 }
 
-/* 缩小到第一、二档时，原始比例也暂时按正方形铺满；
-   模式状态和右上角按钮文字保持不变，放大回第三档时再展开。 */
+/* 缩小到标准档以下时，原始比例也暂时按正方形铺满；
+   模式状态和右上角按钮文字保持不变，放大回标准档时再展开。 */
 .photo-grid.gallery-square .tile img,
 .photo-grid.gallery-square .tile.is-video .shot::before {
   transform: scale(var(--cs, 1));
+}
+/* 进入标准档以下时，格子本身要在同一帧变成正方形。照片若还保留
+   240ms 的 transform 过渡，保留下来的旧格子和新补格子就会一上一下
+   呈现两套状态。这里只保留透明度过渡，尺寸与裁切立即落定。 */
+.photo-grid.gallery-square .tile img,
+.photo-grid.gallery-square .tile .crop > .gallery-thumb-atlas,
+.photo-grid.gallery-square .tile .crop::before,
+.photo-grid.gallery-square .tile.is-video .shot::before {
+  transition: none !important;
 }
 .photo-grid.gallery-square .tile-check {
   right: 6px;
@@ -4444,6 +4607,15 @@ html.gallery-grid-action-locked
 html.gallery-grid-action-locked #content.is-drag-scrolling .photo-grid .tile {
   cursor: grabbing;
 }
+/* Ctrl+滚轮/触控板捏合只预览现有画面的 GPU 缩放。手势结束前不在
+   主线程重排网格，也不允许误触照片。 */
+html.gallery-wheel-zooming #content .tile,
+html.gallery-wheel-zooming #content .tile * {
+  pointer-events: none;
+}
+html.gallery-wheel-zooming #content {
+  cursor: zoom-in;
+}
 .photo-grid.gallery-square.is-album-revealing .tile {
   background: transparent;
 }
@@ -4457,6 +4629,13 @@ html.gallery-grid-action-locked #content.is-drag-scrolling .photo-grid .tile {
   position: relative;
   display: block;
   gap: 0;
+}
+/* 窗口化网格已经在 JS 里按可见区和几行缓冲限制了节点数。
+   再给每个格子叠加 content-visibility:auto，会让 Chromium 在一次大幅
+   换档后继续沿用旧的裁剪范围：DOM 和图片都已就绪，下半屏却要等滚动
+   1px 才重新绘制。这里必须让窗口内的真实格子直接参与绘制。 */
+.photo-grid.photo-grid-windowed .tile {
+  content-visibility: visible;
 }
 .photo-grid.photo-layout-justified .tile,
 .photo-grid.photo-layout-masonry .tile,
@@ -5159,6 +5338,10 @@ html[data-color-mode="dark"] .viewer.is-map-photo-viewer {
   gap: 7px;
   pointer-events: none;
 }
+/* 胶片栏是底边浮层；计数胶囊让到照片栏上方，避免压住最右侧缩略图。 */
+.viewer:has(#viewerFilmstrip:not([hidden])) .viewer-meta {
+  bottom: 84px;
+}
 .viewer-favorite {
   display: block;
   position: relative;
@@ -5175,30 +5358,14 @@ html[data-color-mode="dark"] .viewer.is-map-photo-viewer {
   width: 100%;
   height: 100%;
 }
-.viewer-favorite.is-just-toggled {
-  animation: viewer-favorite-pop 0.24s cubic-bezier(0.2, 0.78, 0.24, 1);
-}
-@keyframes viewer-favorite-pop {
-  0% {
-    transform: scale(0.62);
-    opacity: 0;
-  }
-  65% {
-    transform: scale(1.12);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
 .viewer-counter {
   display: inline-block;
-  padding: 5px 10px;
-  border-radius: 999px;
+  padding: 0;
   font-size: 13px;
+  line-height: 1.2;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
-  color: var(--viewer-muted);
+  color: color-mix(in srgb, var(--viewer-ink) 82%, transparent);
 }
 .viewer:not(.has-multi) .viewer-counter {
   visibility: hidden;
@@ -6699,13 +6866,17 @@ html[data-color-mode="dark"] .viewer-panel {
   padding-bottom: 10px;
   font-size: 13px;
 }
+.viewer-info-summary[hidden],
+.viewer-info-specs[hidden] {
+  display: none;
+}
 .viewer-info-specs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--viewer-spec-count, 5), minmax(0, 1fr));
   border-top: 0.5px solid rgba(120, 120, 128, 0.22);
 }
 .viewer-info-specs.is-video {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--viewer-spec-count, 2), minmax(0, 1fr));
 }
 .viewer-info-spec {
   position: relative;
@@ -7626,6 +7797,10 @@ html.blur-titlebar .picker-sheet {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: none;
+  box-shadow:
+    var(--menu-glass-shadow),
+    inset 0 10px 12px -16px rgba(0, 0, 0, 0.42),
+    inset 0 -10px 12px -16px rgba(0, 0, 0, 0.42);
 }
 .popmenu.is-viewport-clamped::-webkit-scrollbar {
   width: 0;
@@ -8861,6 +9036,10 @@ body.resizing .album-map-host iframe {
 .map-filmstrip.is-filmstrip-entering {
   animation: map-filmstrip-reveal 420ms var(--ease-out) both;
 }
+.map-filmstrip.is-viewer-departing {
+  /* 查看器打开时让照片栏从照片上方向下退场，而不是被查看器直接盖住消失。 */
+  z-index: 55;
+}
 .map-filmstrip.is-filmstrip-exiting {
   pointer-events: none;
   animation: map-filmstrip-exit 240ms var(--ease-out) both;
@@ -8930,11 +9109,6 @@ body.resizing .album-map-host iframe {
   display: none;
 }
 .map-filmstrip.map-filmstrip-disabled {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-body:has(> #viewer:not([hidden])) .map-filmstrip {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -9265,6 +9439,13 @@ html.transparent-titlebar #content.location-grid-view {
   padding: 15px 4px;
   background: color-mix(in srgb, var(--main-bg) 92%, transparent);
   backdrop-filter: blur(18px) saturate(1.08);
+}
+
+@media (max-width: 1100px) {
+  /* 窄窗口不再出现 3 + 1 的孤立换行，四种照片墙固定成 2 × 2。 */
+  .photo-wall-style-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .photo-wall-style-choice {
@@ -12342,4 +12523,55 @@ html.trash-hover-only #trashNavBtn:not(:hover):not(:focus-visible) {
 .sidebar-foot-card #trashNavBtn.sidebar-foot-album.is-active {
   background: var(--hover);
   box-shadow: none;
+}
+
+/* ---------- 角落控件的菜单玻璃材质 ----------
+   鼠标靠近哪一个角，只点亮那一侧的控件。左右状态分别维护，
+   顶栏与选择底栏也互不联动；离开后各自恢复默认按钮表面。 */
+
+.library-time-modes {
+  transition:
+    background-color 170ms var(--ease-out),
+    border-color 170ms var(--ease-out),
+    box-shadow 170ms var(--ease-out);
+}
+
+html.transparent-titlebar.toolbar-left-material-near .library-time-modes,
+html.transparent-titlebar.toolbar-left-material-near
+  #toolbarLeftZone
+  > #backBtn:not([hidden]),
+html.transparent-titlebar.toolbar-left-material-near
+  #sidebarRailBtn
+  .sidebar-rail-visual,
+html.transparent-titlebar.toolbar-right-material-near
+  #toolbarRightZone
+  > :is(.pill-btn, #moreTopBtn, #createBtn):not([hidden]),
+html.transparent-titlebar.selection-left-material-near
+  #selbar
+  > :is(#shareBtn, #trashDelSelBtn):not([hidden]),
+html.transparent-titlebar.selection-right-material-near
+  #selbar
+  > :is(#trashSelBtn, #trashRestoreSelBtn, #numberingDoneBtn):not([hidden]) {
+  /* 靠近状态必须优先于实色、模糊、透明三种标题栏材质。 */
+  border-color: transparent !important;
+  background: var(--menu-glass-bg) !important;
+  -webkit-backdrop-filter: var(--menu-glass-backdrop) !important;
+  backdrop-filter: var(--menu-glass-backdrop) !important;
+  box-shadow: var(--menu-control-glass-shadow) !important;
+}
+/* 相簿栏开关在悬停展开模式下默认是透明描边；靠近左上角时仍要
+   跟时间按钮一起变成同一层菜单玻璃。 */
+html.transparent-titlebar.toolbar-left-material-near
+  #sidebarRailBtn
+  .sidebar-rail-visual {
+  background: var(--menu-glass-bg) !important;
+  -webkit-backdrop-filter: var(--menu-glass-backdrop) !important;
+  backdrop-filter: var(--menu-glass-backdrop) !important;
+  box-shadow: var(--menu-control-glass-shadow) !important;
+}
+.selbar > .selbar-act {
+  transition:
+    background 0.15s,
+    color 0.15s,
+    box-shadow 170ms var(--ease-out);
 }

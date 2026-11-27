@@ -23,6 +23,11 @@ test("导入走后台轮询，期间事件循环空闲、不阻塞主界面", ()
   );
   assert.match(pick, /background: true/);
   assert.match(pick, /rootImportInProgress/);
+  assert.match(
+    pick,
+    /if \(!picked\.path\) return;[\s\S]*?showWindowWithInterface\(\);[\s\S]*?api\("\/api\/roots"/,
+    "首次导入开始后应立即进入应用外壳，而不是停在启动遮罩",
+  );
   /* 并发导入只挡导入本身，给 toast，不锁死 UI */
   assert.match(pick, /正在导入图库，请等待当前任务完成/);
 });

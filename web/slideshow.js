@@ -34,6 +34,9 @@
   const isEnglishUI = () => window.FotoraLanguage?.getLanguage?.() === "en";
   const uiText = (value) =>
     window.FotoraLanguage?.translateValue?.(String(value)) ?? String(value);
+  const countFormat = new Intl.NumberFormat("zh-CN");
+  const formatCount = (value) =>
+    countFormat.format(Math.max(0, Math.trunc(Number(value) || 0)));
   const EN_DAY_FORMAT = new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
@@ -103,6 +106,32 @@
   let settingsOpen = false;
 
   const isReducedMotion = () => reducedMotionQuery.matches;
+  function playbackSnapshot() {
+    return {
+      active,
+      paused,
+      ended,
+      sceneIndex,
+      sceneCount: scenes.length,
+      photoCount: photos.length,
+      currentPhotoId: Number(scenes[sceneIndex]?.items?.[0]?.id) || null,
+      title: title.textContent || "幻灯片",
+      controlsVisibleOnOpen,
+      repeatPlayback,
+      playbackSpeed,
+      playbackOrder,
+      settingsOpen,
+      controlsVisible: root.classList.contains("controls-visible"),
+      pausedByVisibility: document.hidden,
+    };
+  }
+  function notifyPlaybackState() {
+    window.dispatchEvent(
+      new CustomEvent("fotora:slideshow-state-change", {
+        detail: playbackSnapshot(),
+      }),
+    );
+  }
   function readControlsVisibleOnOpen() {
     try {
       const stored = localStorage.getItem(SHOW_SLIDESHOW_CONTROLS_KEY);
@@ -529,12 +558,19 @@
   function updateCounter(entry) {
     const first = entry.startPhotoIndex + 1;
     const last = entry.endPhotoIndex + 1;
-    const range = first === last ? String(first) : `${first}–${last}`;
-    counter.textContent = `${range} / ${photos.length}`;
+    const range =
+      first === last
+        ? formatCount(first)
+        : `${formatCount(first)}–${formatCount(last)}`;
+    counter.textContent = `${range} / ${formatCount(photos.length)}`;
     liveStatus.textContent =
       last === first
-        ? uiText(`第 ${first} 张，共 ${photos.length} 张`)
-        : uiText(`第 ${first} 到 ${last} 张，共 ${photos.length} 张`);
+        ? uiText(
+            `第 ${formatCount(first)} 张，共 ${formatCount(photos.length)} 张`,
+          )
+        : uiText(
+            `第 ${formatCount(first)} 到 ${formatCount(last)} 张，共 ${formatCount(photos.length)} 张`,
+          );
   }
 
   function setControlInteractivity(enabled) {
@@ -726,6 +762,7 @@
     }
     preloadScene(1);
     preloadScene(2);
+    notifyPlaybackState();
   }
 
   function advanceScene() {
@@ -786,6 +823,7 @@
     pauseSceneAnimations();
     updateControlsState();
     showControls();
+    notifyPlaybackState();
   }
 
   function resumePlayback() {
@@ -800,6 +838,7 @@
     resumeSceneAnimations();
     scheduleAdvance(sceneRemaining);
     showControls();
+    notifyPlaybackState();
   }
 
   function togglePlayback() {
@@ -828,7 +867,12 @@
     if (sidebarRailButton) sidebarRailButton.inert = value;
   }
 
-  function open({ items, title: albumTitle = "幻灯片" } = {}) {
+  function open({
+    items,
+    title: albumTitle = "幻灯片",
+    startPhotoId = null,
+    startPaused = false,
+  } = {}) {
     const playable = (items || []).filter((item) => item?.kind === "photo");
     if (!playable.length) return false;
     window.clearTimeout(closeTimer);
@@ -843,7 +887,13 @@
     settingsButton.setAttribute("aria-expanded", "false");
     updatePlaybackSettingsUI();
     photos = playable;
-    scenes = buildPlaybackScenes();
+    scenes = buildPlaybackScenes(startPhotoId);
+    const requestedPhotoId = Number(startPhotoId);
+    const initialIndex = Number.isInteger(requestedPhotoId)
+      ? scenes.findIndex((entry) =>
+          entry.items.some((item) => Number(item.id) === requestedPhotoId),
+        )
+      : 0;
     sceneIndex = -1;
     currentScene = null;
     paused = false;
@@ -859,16 +909,22 @@
     root.classList.remove("is-closing");
     document.body.classList.add("slideshow-open");
     setInert(true);
-    renderScene(0, { animateIn: true, preservePrevious: false });
+    renderScene(initialIndex >= 0 ? initialIndex : 0, {
+      animateIn: true,
+      preservePrevious: false,
+    });
+    if (startPaused) pausePlayback();
     applyControlPreference();
     root.focus({ preventScroll: true });
     introTimer = window.setTimeout(hideIntro, INTRO_HOLD_MS);
+    notifyPlaybackState();
     return true;
   }
 
   function close({ immediate = false } = {}) {
     if (!active && root.hidden) return;
     active = false;
+    notifyPlaybackState();
     clearSceneTimer();
     window.clearTimeout(controlsTimer);
     window.clearTimeout(introTimer);
@@ -1069,20 +1125,6 @@
     setPlaybackOrder,
     setPlaybackSpeed,
     isOpen: () => active,
-    getState: () => ({
-      active,
-      paused,
-      ended,
-      sceneIndex,
-      sceneCount: scenes.length,
-      photoCount: photos.length,
-      controlsVisibleOnOpen,
-      repeatPlayback,
-      playbackSpeed,
-      playbackOrder,
-      settingsOpen,
-      controlsVisible: root.classList.contains("controls-visible"),
-      pausedByVisibility: document.hidden,
-    }),
+    getState: playbackSnapshot,
   };
 })();

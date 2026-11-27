@@ -18,10 +18,10 @@
   const MARKER_FULL_ZOOM = 10.5;
   const MIN_MARKER_SCALE = 0.3;
   const MARKER_TAIL_HEIGHT = 12;
-  /* 定位柔光的播放时长，和 globe-map.css 里 pmPingHalo 保持一致。
-     播完就把节点摘掉，只亮这一次。 */
-  const PING_HALO_MS = 600;
-  const PING_HALO_TAIL_MS = 80;
+  /* 照片定位双闪的播放时长，和 globe-map.css 里 pmPhotoFlashTwice 保持一致。
+      播完就把节点摘掉，避免标记重新挂回 DOM 时重播。 */
+  const PHOTO_FLASH_MS = 520;
+  const PHOTO_FLASH_TAIL_MS = 60;
   /* MapLibre 的技术下限；实际下限按当前视口能完整容纳地球圆时动态计算。 */
   const MAP_MIN_ZOOM = 0.5;
   const MAP_MAX_ZOOM = 20;
@@ -256,8 +256,8 @@
       this.markerBadges = [];
       this.markerRecords = new Map();
       this.selectedMarkerEl = null;
-      this.pingHost = null;
-      this.pingTimer = 0;
+      this.flashHost = null;
+      this.flashTimer = 0;
       this.photoCanvas = null;
       this.photoCanvasContext = null;
       this.photoCanvasBuffer = null;
@@ -271,6 +271,7 @@
       this.photoCanvasImageQueued = new Set();
       this.photoCanvasImageActive = 0;
       this.photoCanvasImageGeneration = 0;
+      this.photoCanvasActiveImages = new Set();
       this.photoCanvasVisibleKeys = new Set();
       this.lastMarkerClickId = null;
       this.targetMarker = null;
@@ -348,6 +349,7 @@
           width,
           height,
           aspect: width / height,
+          thumbMicro: String(raw.thumbMicro || raw.thumb || ""),
           thumb: String(raw.thumb || ""),
           thumbLarge: String(raw.thumbLarge || raw.thumb || ""),
           takenAt: Number(raw.takenAt) || 0,
@@ -592,7 +594,6 @@
       if (!this.typeToggle) return;
       this.typeToggle.classList.add("map-toggle-btn");
       this.typeToggle.innerHTML = ICON_SATELLITE;
-      this.typeToggle.title = "切换到卫星图";
       this.typeToggle.setAttribute("aria-label", "切换到卫星图");
       this.setStyleKind(this.styleKind);
       if (this.compassButton) {
@@ -1157,7 +1158,6 @@
       if (this.typeToggle) {
         this.typeToggle.innerHTML = satellite ? ICON_MAP : ICON_SATELLITE;
         const label = satellite ? "切换到普通地图" : "切换到卫星图";
-        this.typeToggle.title = label;
         this.typeToggle.setAttribute("aria-label", label);
       }
       if (!this.map || !this.mapLoaded) return;
@@ -1737,16 +1737,18 @@
       return [Math.round(width), Math.round(height)];
     }
 
-    photoCanvasImageKey(item) {
-      return `${Number(item?.id) || 0}|${String(item?.thumb || "")}`;
+    photoCanvasImageKey(item, src = item?.thumb || "") {
+      return `${Number(item?.id) || 0}|${String(src || "")}`;
     }
 
-    requestPhotoCanvasImage(item) {
-      const key = this.photoCanvasImageKey(item);
-      if (!key || !item?.thumb || this.photoCanvasImages.has(key)) return;
+    requestPhotoCanvasImage(item, src = item?.thumb, { front = false } = {}) {
+      const key = this.photoCanvasImageKey(item, src);
+      if (!key || !src || this.photoCanvasImages.has(key)) return;
       if (this.photoCanvasImageQueued.has(key)) return;
       this.photoCanvasImageQueued.add(key);
-      this.photoCanvasImageQueue.push({ key, src: item.thumb });
+      const task = { key, src };
+      if (front) this.photoCanvasImageQueue.unshift(task);
+      else this.photoCanvasImageQueue.push(task);
       this.pumpPhotoCanvasImageQueue();
     }
 
@@ -1761,7 +1763,10 @@
         const image = new Image();
         image.decoding = "async";
         image.draggable = false;
+        image.fetchPriority = "high";
+        this.photoCanvasActiveImages.add(image);
         const finish = (ready) => {
+          this.photoCanvasActiveImages.delete(image);
           if (generation !== this.photoCanvasImageGeneration) return;
           this.photoCanvasImageActive = Math.max(
             0,
@@ -1778,6 +1783,35 @@
         image.addEventListener("load", () => finish(true), { once: true });
         image.addEventListener("error", () => finish(false), { once: true });
         image.src = task.src;
+      }
+    }
+
+    resetPhotoCanvasImageQueue() {
+      this.photoCanvasImageGeneration += 1;
+      for (const image of this.photoCanvasActiveImages) {
+        image.removeAttribute("src");
+      }
+      this.photoCanvasActiveImages.clear();
+      this.photoCanvasImageQueue = [];
+      this.photoCanvasImageQueued.clear();
+      this.photoCanvasImageActive = 0;
+    }
+
+    primePhotoCanvasVisibleImages(groups) {
+      for (const group of groups || []) {
+        const item = group?.[0];
+        if (!item) continue;
+        const highKey = this.photoCanvasImageKey(item, item.thumb);
+        const microKey = this.photoCanvasImageKey(item, item.thumbMicro);
+        if (
+          this.photoCanvasImages.has(highKey) ||
+          this.photoCanvasImages.has(microKey)
+        ) {
+          continue;
+        }
+        this.requestPhotoCanvasImage(item, item.thumbMicro || item.thumb, {
+          front: true,
+        });
       }
     }
 
@@ -1801,15 +1835,12 @@
         this.photoCanvasFrame = 0;
       }
       if (this.photoCanvas) this.photoCanvas.hidden = true;
+      this.resetPhotoCanvasImageQueue();
       if (release) {
-        this.photoCanvasImageGeneration += 1;
         for (const { image } of this.photoCanvasImages.values()) {
           image.removeAttribute("src");
         }
         this.photoCanvasImages.clear();
-        this.photoCanvasImageQueue = [];
-        this.photoCanvasImageQueued.clear();
-        this.photoCanvasImageActive = 0;
       }
     }
 
@@ -1924,10 +1955,20 @@
       )
         return null;
 
-      const imageKey = this.photoCanvasImageKey(item);
-      this.photoCanvasVisibleKeys.add(imageKey);
-      this.requestPhotoCanvasImage(item);
-      const cached = this.photoCanvasImages.get(imageKey);
+      const highKey = this.photoCanvasImageKey(item, item.thumb);
+      const microKey = this.photoCanvasImageKey(item, item.thumbMicro);
+      this.photoCanvasVisibleKeys.add(highKey);
+      this.photoCanvasVisibleKeys.add(microKey);
+      this.requestPhotoCanvasImage(item, item.thumb);
+      let cached = this.photoCanvasImages.get(highKey);
+      if (!cached) {
+        cached = this.photoCanvasImages.get(microKey);
+        if (!cached) {
+          this.requestPhotoCanvasImage(item, item.thumbMicro || item.thumb, {
+            front: true,
+          });
+        }
+      }
       if (cached) cached.used += 1;
       const radius = 4;
 
@@ -2094,7 +2135,7 @@
           {
             keepZoom: false,
             allowZoomOut: false,
-            ripple: false,
+            flash: false,
           },
         );
         return;
@@ -2109,7 +2150,7 @@
     }
 
     clearMarkers() {
-      this.clearPing();
+      this.clearFlash();
       for (const marker of this.markers) marker.remove();
       this.markers = [];
       this.markerImgs = [];
@@ -2124,6 +2165,40 @@
       badge.textContent = countLabel;
       badge.setAttribute("aria-hidden", "true");
       return badge;
+    }
+
+    applyMarkerPhoto(record, item) {
+      const micro = String(item?.thumbMicro || item?.thumb || "");
+      const low = String(item?.thumb || item?.thumbMicro || "");
+      const high = String(item?.thumbLarge || low);
+      const key = `${Number(item?.id) || 0}|${micro}|${low}|${high}`;
+      if (!record || record.thumbKey === key) return;
+      record.thumbKey = key;
+      const token = (record.thumbToken || 0) + 1;
+      record.thumbToken = token;
+      const image = record.image;
+      image.style.backgroundImage = micro
+        ? `url(${JSON.stringify(micro)})`
+        : "";
+      image.dataset.thumbMicro = micro;
+      image.dataset.thumbLarge = high;
+      image.removeAttribute("src");
+      if (!low) return;
+      image.src = low;
+      if (!high || high === low) return;
+      const upgrade = new Image();
+      upgrade.decoding = "async";
+      upgrade.onload = () => {
+        if (
+          record.thumbToken === token &&
+          record.image === image &&
+          image.isConnected
+        ) {
+          image.src = high;
+        }
+      };
+      upgrade.onerror = () => {};
+      upgrade.src = high;
     }
 
     markerElement(group) {
@@ -2155,10 +2230,11 @@
       element.setAttribute("aria-label", accessibleLabel);
 
       const image = document.createElement("img");
-      image.src = representative.thumbLarge || representative.thumb;
       image.alt = "";
       image.draggable = false;
       image.decoding = "async";
+      image.loading = "eager";
+      image.fetchPriority = "high";
       image.style.width = `${size[0]}px`;
       image.style.height = `${size[1]}px`;
       image.style.objectFit = "cover";
@@ -2211,6 +2287,8 @@
         image: element.querySelector("img"),
         badge: element.querySelector(".pm-group-badge"),
         marker,
+        thumbKey: "",
+        thumbToken: 0,
       };
       this.markerRecords.set(record.key, record);
       return record;
@@ -2258,11 +2336,7 @@
       if (record.image.style.height !== height) {
         record.image.style.height = height;
       }
-      const representativeThumb =
-        representative.thumbLarge || representative.thumb;
-      if (record.image.getAttribute("src") !== representativeThumb) {
-        record.image.src = representativeThumb;
-      }
+      this.applyMarkerPhoto(record, representative);
 
       if (group.length > 1) {
         if (!record.badge) {
@@ -2303,11 +2377,13 @@
         groups.length > DENSE_MARKER_CANVAS_THRESHOLD;
       if (usePhotoCanvas) {
         this.clearMarkers();
+        this.resetPhotoCanvasImageQueue();
         this.photoCanvasActive = true;
         this.photoCanvasGroups = groups;
         if (this.photoCanvas) {
           this.photoCanvas.hidden = false;
         }
+        this.primePhotoCanvasVisibleImages(groups);
         this.schedulePhotoCanvasRender();
         document.body.dataset.markerRenderer = "canvas";
         document.body.dataset.markerCount = String(groups.length);
@@ -2319,8 +2395,7 @@
           this.selectedId == null ? "" : String(this.selectedId);
         return;
       }
-      const canvasWasActive = this.photoCanvasActive;
-      this.clearPhotoCanvasLayer({ release: canvasWasActive });
+      this.clearPhotoCanvasLayer({ release: false });
       const nextRecords = new Map();
       for (const group of groups) {
         const key = this.groupMarkerKey(group);
@@ -2347,6 +2422,39 @@
       );
       document.body.dataset.selectedId =
         this.selectedId == null ? "" : String(this.selectedId);
+    }
+
+    upsertItems(rawItems) {
+      const incoming = this.normalizeItems(rawItems);
+      if (!incoming.length) return 0;
+      const byId = new Map(this.items.map((item) => [item.id, item]));
+      let changed = 0;
+      for (const item of incoming) {
+        const previous = byId.get(item.id);
+        if (
+          !previous ||
+          previous.lat !== item.lat ||
+          previous.lon !== item.lon ||
+          previous.width !== item.width ||
+          previous.height !== item.height ||
+          previous.aspect !== item.aspect ||
+          previous.takenAt !== item.takenAt ||
+          previous.name !== item.name ||
+          previous.thumbMicro !== item.thumbMicro ||
+          previous.thumb !== item.thumb ||
+          previous.thumbLarge !== item.thumbLarge
+        ) {
+          changed += 1;
+        }
+        byId.set(item.id, item);
+      }
+      if (!changed) return 0;
+      this.items = [...byId.values()].sort(
+        (a, b) => a.takenAt - b.takenAt || a.id - b.id,
+      );
+      this.renderMarkers();
+      this.updateDiagnostics();
+      return changed;
     }
 
     setItems(rawItems, { fit = false, deferFit = false, fitToken = 0 } = {}) {
@@ -2407,7 +2515,6 @@
         this.targetMarker = null;
       }
       const element = document.createElement("div");
-      element.title = "目标位置";
       element.setAttribute("aria-label", "目标位置");
       if (this.options.sourcePinTarget) {
         element.className = "metadata-map-pin-anchor";
@@ -2469,7 +2576,7 @@
         this.flyToPlace(displayLng, displayLat, 13, {
           keepZoom: false,
           allowZoomOut: true,
-          ripple: false,
+          flash: false,
         });
       }
       return true;
@@ -2485,15 +2592,15 @@
       delete document.body.dataset.targetLon;
     }
 
-    /* 定位柔光是照片栏点击专属的反馈，默认不发；
+    /* 照片双闪是照片栏点击专属的反馈，默认不发；
        只有 album-map / locations 收到照片栏点击消息时才显式打开。 */
-    focusItem(id, { zoom = 12, ripple = false, keepZoom = true } = {}) {
+    focusItem(id, { zoom = 12, flash = false, keepZoom = true } = {}) {
       const item = this.items.find((entry) => entry.id === Number(id));
       if (!item || !this.map) return false;
       this.selectedId = item.id;
       this.renderMarkers();
       const [lng, lat] = this.toMapLngLat(item.lat, item.lon);
-      this.flyToPlace(lng, lat, zoom, { ripple, keepZoom });
+      this.flyToPlace(lng, lat, zoom, { flash, keepZoom });
       this.post("focus-item", { id: item.id });
       return true;
     }
@@ -2515,7 +2622,7 @@
       this.flyToPlace(lng, displayLat, zoom, {
         keepZoom: false,
         allowZoomOut: true,
-        ripple: false,
+        flash: false,
       });
       return true;
     }
@@ -2632,23 +2739,23 @@
       return maximumPeak - peak < FLY_FIT_PEAK_DEADBAND ? maximumPeak : peak;
     }
 
-    /* 把柔光节点彻底收掉：换照片时收上一张，播完时收自己。
+    /* 把双闪节点彻底收掉：换照片时收上一张，播完时收自己。
        节点只要还带着 .on 留在标记里，等标记被移出又挂回 DOM
        （比如关掉地图再打开）动画就会重播一次，看起来像“一打开地图就亮”。 */
-    clearPing() {
-      if (this.pingTimer) {
-        clearTimeout(this.pingTimer);
-        this.pingTimer = 0;
+    clearFlash() {
+      if (this.flashTimer) {
+        clearTimeout(this.flashTimer);
+        this.flashTimer = 0;
       }
-      const host = this.pingHost;
-      this.pingHost = null;
+      const host = this.flashHost;
+      this.flashHost = null;
       host?.querySelector(".pm-ping")?.remove();
     }
 
     /* 点击照片栏里的照片、飞行定位到之后的确认：
-       在照片背后亮一圈紧贴边缘的柔光，向外发散一次再收掉。
-       柔光节点插在 img 之前，所以始终画在照片后面，不会遮挡缩略图。 */
-    pingMarker() {
+       在照片背后亮一圈紧贴边缘的轮廓，不移动、不扩散，连续闪两次。
+       节点插在 img 之前，所以始终画在照片后面，不会遮挡缩略图。 */
+    flashMarker() {
       const element = this.selectedMarkerEl;
       if (!element || !element.isConnected) return;
       const image = element.querySelector("img");
@@ -2656,7 +2763,7 @@
       const scale = this.curMarkerScale || 1;
       const elementRect = element.getBoundingClientRect();
       const imageRect = image.getBoundingClientRect();
-      if (this.pingHost && this.pingHost !== element) this.clearPing();
+      if (this.flashHost && this.flashHost !== element) this.clearFlash();
       let ring = element.querySelector(".pm-ping");
       if (!ring) {
         ring = document.createElement("span");
@@ -2672,19 +2779,19 @@
       ring.style.width = `${imageRect.width}px`;
       ring.style.height = `${imageRect.height}px`;
       if (halo) {
-        /* 柔光盒和照片边框盒重合，圆角也就跟着照片一起缩放。 */
+        /* 轮廓盒和照片边框盒重合，圆角始终跟照片一致。 */
         halo.style.borderRadius = `${Math.max(1, Math.round(4 * scale))}px`;
       }
       ring.classList.remove("on");
       void ring.offsetWidth;
       ring.classList.add("on");
-      this.pingHost = element;
-      /* 播完自己收掉：这个反馈只该在定位落定的那一下出现一次。 */
-      if (this.pingTimer) clearTimeout(this.pingTimer);
-      this.pingTimer = setTimeout(() => {
-        this.pingTimer = 0;
-        if (this.pingHost === element) this.clearPing();
-      }, PING_HALO_MS + PING_HALO_TAIL_MS);
+      this.flashHost = element;
+      /* 播完自己收掉：这个反馈只在定位落定时出现一轮双闪。 */
+      if (this.flashTimer) clearTimeout(this.flashTimer);
+      this.flashTimer = setTimeout(() => {
+        this.flashTimer = 0;
+        if (this.flashHost === element) this.clearFlash();
+      }, PHOTO_FLASH_MS + PHOTO_FLASH_TAIL_MS);
     }
 
     flyToPlace(lng, lat, targetZoom, options = {}) {
@@ -2724,7 +2831,7 @@
       document.body.dataset.flightDistance = distance.toFixed(6);
       document.body.dataset.flightRoute = onScreen ? "direct" : "fit-route";
       if (panPx < FLY_STILL_PX && zoomLevels < 0.05) {
-        if (options.ripple) this.pingMarker();
+        if (options.flash) this.flashMarker();
         options.onComplete?.();
         return;
       }
@@ -2737,12 +2844,12 @@
         baseDuration * FLIGHT_SPEED_DURATION_FACTORS[this.flightSpeed];
       document.body.dataset.flightSpeed = this.flightSpeed;
       document.body.dataset.flightDuration = String(Math.round(duration));
-      if (options.ripple) {
-        if (zoomLevels < 0.05) this.pingMarker();
+      if (options.flash) {
+        if (zoomLevels < 0.05) this.flashMarker();
         else {
           this.flyTimer = setTimeout(() => {
             this.flyTimer = 0;
-            if (generation === this.flyGen) this.pingMarker();
+            if (generation === this.flyGen) this.flashMarker();
           }, duration + 40);
         }
       }
@@ -2935,7 +3042,7 @@
       this.flyToPlace(target.center[0], target.center[1], target.zoom, {
         keepZoom: false,
         allowZoomOut: true,
-        ripple: false,
+        flash: false,
         onComplete: finish,
         /* 用户拖动、滚轮或缩放会中断初始取景。地图停留位置已经稳定，
            这里也释放照片栏门控，避免只认正常飞完这一条路径。 */
@@ -3035,7 +3142,6 @@
         "aria-label",
         northUp ? "地图已朝北" : "转到正北朝上",
       );
-      this.compassButton.title = northUp ? "地图已朝北" : "转到正北朝上";
     }
 
     activate() {

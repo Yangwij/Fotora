@@ -450,11 +450,11 @@ test("预热走后台队列，可见区那条 GET 仍然是前台优先级", () 
     indexSource,
     /thumbs\.ensureThumb\(item, size, fit, \{\s*lane: "background",\s*signal: controller\.signal,/,
   );
-  /* 可见区那条 GET：不传 lane（默认就是前台），但要跟着连接一起取消。 */
+  /* 可见区那条 GET 默认走前台；只有 L0 预热可显式标记为后台。 */
   assert.match(
     indexSource,
-    /if \(parts\[1\] === "thumb" && parts\[2\]\) \{[\s\S]*?await thumbs\.ensureThumb\(item, size, fit, \{\s*signal: controller\.signal,\s*\}\);/,
-    "可见区的 GET /api/thumb 不该带 lane 参数，默认就是前台",
+    /if \(parts\[1\] === "thumb" && parts\[2\]\) \{[\s\S]*?url\.searchParams\.get\("lane"\) === "background"[\s\S]*?lane: "background"[\s\S]*?signal: controller\.signal,/,
+    "普通 GET 默认前台，L0 预热可显式走后台",
   );
   assert.match(
     indexSource,
@@ -482,6 +482,15 @@ test("前端从当前可见区往下排预热计划，滚到哪里就重排到�
     /function buildThumbPrefetchPlan\(range\) \{[\s\S]*range\.last \+ 1[\s\S]*range\.first - 1/,
   );
   assert.match(section, /const THUMB_PREFETCH_AHEAD = 2400;/);
+  const plan = section.slice(
+    section.indexOf("function buildThumbPrefetchPlan("),
+    section.indexOf("function rebuildThumbPrefetchPlan("),
+  );
+  assert.doesNotMatch(
+    plan,
+    /downEnd \+ 1 < items\.length|upStart - 1 >= 0/,
+    "高清 L1 不应在空闲时继续铺满整个图库",
+  );
   /* 整库刚导入时缩略图全是冷的，批量要够大，别被提交速率卡住。 */
   assert.match(section, /const THUMB_PREFETCH_BATCH = 24;/);
   assert.match(section, /const THUMB_PREFETCH_TIMEOUT_MS = 45000;/);
@@ -499,8 +508,8 @@ test("前端从当前可见区往下排预热计划，滚到哪里就重排到�
   assert.match(section, /const THUMB_PREFETCH_JUMP_MIN = 200;/);
   assert.match(
     section,
-    /if \(moved >= THUMB_PREFETCH_JUMP_MIN\) \{\s*cancelThumbPrefetchBatch\(\);\s*thumbPrefetchSettleUntil = Date\.now\(\) \+ THUMB_PREFETCH_SETTLE_MS;\s*\}/,
-    "拖滚动条这种大跳要掐掉在途批次，并记下停稳时间",
+    /if \(moved >= THUMB_PREFETCH_JUMP_MIN\) \{[\s\S]*?cancelThumbPrefetchBatch\(\);[\s\S]*?stopThumbDecodeAhead\(\);[\s\S]*?thumbPrefetchSettleUntil = settled\s*\?\s*0\s*:\s*Date\.now\(\) \+ THUMB_PREFETCH_SETTLE_MS;/,
+    "拖滚动条这种大跳要掐掉在途批次和旧解码队列，并区分停稳后的立即重排",
   );
   /* 大跳之后等视野停稳再排计划，别把刚排好的一批立刻作废。 */
   assert.match(section, /const THUMB_PREFETCH_SETTLE_MS = 200;/);
@@ -531,7 +540,7 @@ test("预生成接在渲染、滚动、换档和窗口前后台这四个时机�
   /* 导入完成 / 切视图都会走到 render() 末尾。 */
   assert.match(
     appSource,
-    /scheduleVisibleContextMapPreviews\(\);\s*\/\* 视图落定了[\s\S]*?armThumbPrefetch\(\);\s*\}/,
+    /scheduleVisibleContextMapPreviews\(\);\s*\/\* 视图落定了[\s\S]*?armThumbPrefetch\(\);\s*queueThumbLowResWarm\(\);[\s\S]*?return true;\s*\}/,
   );
   /* 滚动时只记账，下一批开工前再重排。 */
   assert.match(
@@ -565,4 +574,81 @@ test("前端一批的数量不超过服务端一次能收的上限", () => {
     batch <= cap,
     `一批 ${batch} 张超过服务端上限 ${cap} 张，多出来的会被丢掉`,
   );
+  const libraryBatch = Number(
+    /const LIBRARY_STANDARD_WARM_BATCH = (\d+);/.exec(appSource)?.[1],
+  );
+  assert.ok(Number.isInteger(libraryBatch) && libraryBatch > 0);
+  assert.ok(
+    libraryBatch <= cap,
+    `全库预热一批 ${libraryBatch} 张超过服务端上限 ${cap} 张`,
+  );
+});
+
+test("导入后按全库顺序补标准细节图，但每批仍走后台优先级", () => {
+  assert.match(
+    appSource,
+    /const LIBRARY_STANDARD_THUMB_SIZE = GALLERY_GRID_DETAIL_SIZE;/,
+  );
+  assert.match(appSource, /const LIBRARY_STANDARD_WARM_BATCH = 48;/);
+  assert.match(
+    appSource,
+    /LIBRARY_STANDARD_WARM_STORAGE_KEY =\s*"fotora-library-standard-thumb-warm-v3"/,
+  );
+  const section = appSource.slice(
+    appSource.indexOf("function libraryStandardWarmItems()"),
+    appSource.indexOf("/* ---------------------- 提前解码"),
+  );
+  assert.match(
+    section,
+    /state\.activeId !== "library"[\s\S]*?state\.albumItems\.length[\s\S]*?state\.albumItemsRaw/,
+  );
+  assert.match(
+    section,
+    /items\.map\(\(item\) => \(\{[\s\S]*?thumbPrefetchKeyOf\(item, LIBRARY_STANDARD_THUMB_SIZE\)/,
+  );
+  assert.match(
+    section,
+    /api\("\/api\/thumbs\/prefetch"[\s\S]*?size: LIBRARY_STANDARD_THUMB_SIZE[\s\S]*?fit: "inside"/,
+  );
+  assert.match(section, /libraryStandardWarmMarkedDone\(signature\)/);
+  assert.match(
+    section,
+    /markLibraryStandardWarmDone\(libraryStandardWarmSignature\)/,
+  );
+  assert.doesNotMatch(
+    section,
+    /rememberThumbPrefetchWarmed\(batch\.map/,
+    "全库预热只负责落盘，不能抢掉可见区后续的提前解码",
+  );
+
+  /* render 是导入完成、切换图库和回到普通图库的共同落点。 */
+  assert.match(
+    appSource,
+    /armThumbPrefetch\(\);\s*queueThumbLowResWarm\(\);\s*ensureLibraryStandardThumbWarm\(\);/,
+  );
+  assert.match(
+    appSource,
+    /armThumbPrefetch\(\{ force: true \}\);[\s\S]*?ensureLibraryStandardThumbWarm\(\);[\s\S]*?scheduleThumbLowResWarm\(0\);/,
+  );
+});
+
+test("全库标准图预热让路给查看器和可见区，但切回图库会继续", () => {
+  const ready = appSource.slice(
+    appSource.indexOf("function libraryStandardWarmReady()"),
+    appSource.indexOf("function scheduleLibraryStandardThumbWarm("),
+  );
+  assert.match(ready, /!state\.busy/);
+  assert.match(ready, /!rootImportRunning\(\)/);
+  assert.match(ready, /\$\("#viewer"\)\?\.hidden/);
+  assert.match(ready, /!galleryAtlasWarmActive/);
+  assert.match(ready, /!galleryAtlasWarmQueue\.length/);
+  assert.match(ready, /gallery-is-scrolling/);
+
+  const tick = appSource.slice(
+    appSource.indexOf("async function runLibraryStandardThumbWarmTick()"),
+    appSource.indexOf("function ensureLibraryStandardThumbWarm("),
+  );
+  assert.match(tick, /LIBRARY_STANDARD_WARM_IDLE_MS/);
+  assert.match(tick, /libraryStandardWarmCursor = startCursor/);
+  assert.match(tick, /signature !== libraryStandardWarmSignature/);
 });

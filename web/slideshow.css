@@ -167,6 +167,13 @@
   line-height: 1.08;
   letter-spacing: -0.035em;
 }
+.slideshow-intro h2 {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 
 .slideshow-intro p {
   margin: 13px 0 0;
@@ -318,7 +325,7 @@
 .slideshow-settings-panel {
   position: absolute;
   top: calc(100% + 10px);
-  left: 0;
+  right: 0;
   width: min(340px, calc(100vw - 32px));
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.78);
@@ -328,7 +335,7 @@
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(30px) saturate(1.12);
   -webkit-backdrop-filter: blur(30px) saturate(1.12);
-  transform-origin: top left;
+  transform-origin: top right;
   animation: slideshow-settings-in 180ms cubic-bezier(0.2, 0.78, 0.24, 1) both;
 }
 

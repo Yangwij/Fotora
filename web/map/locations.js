@@ -214,7 +214,6 @@
     searchInput.tabIndex = searchExpanded ? 0 : -1;
     const submit = searchForm.querySelector(".globe-place-search-submit");
     if (submit) {
-      submit.title = searchExpanded ? "搜索" : "搜索地点";
       submit.setAttribute(
         "aria-label",
         searchExpanded ? "搜索" : "展开地点搜索",
@@ -586,6 +585,11 @@
       });
       return;
     }
+    if (message.type === "locations-map:upsert-items") {
+      const changed = globe.upsertItems(message.items);
+      if (changed) post("locations-map:items-upserted", { changed });
+      return;
+    }
     if (message.type === "locations-map:animate-fit") {
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         globe.fitAll();
@@ -605,7 +609,7 @@
     if (message.type === "locations-map:focus-item") {
       globe.focusItem(message.id, {
         zoom: 12,
-        ripple: true,
+        flash: true,
         keepZoom: false,
       });
       return;

@@ -105,10 +105,8 @@ test("JS 布局按 --gallery-seam-bleed 把每个盒子朝右下各撑大", () =
     app,
     /function growPhotoBoxesForSeam\(boxes, bleed\)\s*\{\s*if \(!\(bleed > 0\)[\s\S]*?return boxes;/,
   );
-  assert.match(
-    app,
-    /growPhotoBoxesForSeam\(result\.boxes, photoLayoutSeamBleed\(grid\)\);/,
-  );
+  assert.match(app, /const seamBleed = photoLayoutSeamBleed\(grid\);/);
+  assert.match(app, /growPhotoBoxesForSeam\(result\.boxes, seamBleed\);/);
 });
 
 test("删除动画的替身带上当前档位，无缝档不会闪出圆角", () => {

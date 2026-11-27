@@ -103,14 +103,15 @@ test("狂点主菜单：重入先取消全部在途动画并截取当前视觉�
   assert.match(open, /detachedSubmenuCleanup\?\.\(\)/);
 });
 
-test("切换相簿/视图复位缩放手势：轮锁、累积量、定时器全部清零", () => {
+test("切换相簿/视图复位缩放手势：预览、落位和定时器全部清零", () => {
   const app = read("web/app.js");
   const reset = fnBody(app, "resetGalleryZoomForViewChange");
 
-  assert.match(reset, /galleryWheelLocked = false/);
-  assert.match(reset, /galleryWheelAccum = 0/);
-  assert.match(reset, /clearTimeout\(galleryWheelTimer\)/);
-  assert.match(reset, /clearTimeout\(galleryWheelUnlockTimer\)/);
+  assert.match(reset, /galleryWheelPreviewLog = 0/);
+  assert.match(reset, /galleryWheelPreviewFocus = null/);
+  assert.match(reset, /clearTimeout\(galleryWheelSettleTimer\)/);
+  assert.match(reset, /clearTimeout\(galleryWheelCommitTimer\)/);
+  assert.match(reset, /clearGalleryWheelZoomPreview\(\)/);
   /* 两条内容切换路径都必须调用复位。 */
   assert.match(
     fnBody(app, "selectAlbumWithContentHandoff"),

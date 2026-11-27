@@ -6,6 +6,7 @@
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const sharp = require("sharp");
 const lib = require("./library");
 const edits = require("./edits");
@@ -23,9 +24,15 @@ sharp.cache(false);
 const THUMB_DIR = lib.THUMB_DIR;
 const PREVIEW_DIR = lib.PREVIEW_DIR;
 const EDIT_DIR = lib.EDIT_DIR;
-const SIZES = [128, 200, 400, 600, 800, 1600];
+const SIZES = [48, 128, 200, 400, 600, 800, 1600];
+const ATLAS_THUMB_SIZE = 48;
+const ATLAS_CELL_SIZE = 64;
+const ATLAS_COLUMNS = 8;
+const ATLAS_CONCURRENCY = 6;
+const ATLAS_FORMAT_VERSION = 2;
 const inflight = new Map();
 const posterInflight = new Map();
+const atlasInflight = new Map();
 
 /* 所有缩略图生成都过这道闸门：可见区（前台）永远优先，后台预生成只吃剩下的名额。
    详见 thumb-scheduler.js。 */
@@ -822,6 +829,19 @@ async function generatePlainThumb(item, px, fit, outPath, job) {
   await fsp.mkdir(path.dirname(outPath), { recursive: true });
   /* 按可能性排队试：原文件 → 内嵌预览（RAW）→ ffmpeg 抽帧（视频）→ Windows 解码器（HEIC） */
   const attempts = [];
+  /* 微型预览优先从已经生成的大缩略图缩小，避免为了 48px 再解码一次原图。
+     这对一万张图库的首次 L0 预热尤其重要。 */
+  if (px <= 200) {
+    /* 从“够用且最小”的缓存开始缩小：48px 不需要先解码 400px，
+       优先用 128px 能把冷启动的解码量和缩放时间一起压下来。 */
+    for (const sourceSize of [128, 200, 400]) {
+      if (sourceSize <= px) continue;
+      const sourcePath = plainThumbPath(item, sourceSize, fit);
+      if (!exists(sourcePath)) continue;
+      attempts.push(async () => sourcePath);
+      break;
+    }
+  }
   if (item.kind === "video") {
     attempts.push(() => videoPoster(item));
   } else if (lib.isRaw(item.path)) {
@@ -888,6 +908,156 @@ async function ensureThumb(item, size, fit = "cover", options = {}) {
     options?.signal || null,
     (job) => generateThumbJob(item, px, fit, thumbJobContext(item), job),
   );
+}
+
+/**
+ * 把最多 64 张 L0 拼成一页图集。格子固定为 64×64，照片按原始比例居中，
+ * 没有内容的部分保持透明。前端只需要一次图片请求就能铺满一整段视野。
+ */
+async function ensureThumbAtlas(
+  ids,
+  {
+    cellSize = ATLAS_CELL_SIZE,
+    columns = ATLAS_COLUMNS,
+    lane = "interactive",
+  } = {},
+) {
+  const cell = Math.max(48, Math.min(96, Number(cellSize) || ATLAS_CELL_SIZE));
+  const cols = Math.max(1, Math.min(12, Number(columns) || ATLAS_COLUMNS));
+  const maxItems = Math.min(64, cols * cols);
+  const itemVersion = (item) =>
+    [
+      item.id,
+      Number(item.mtime) || 0,
+      Number(item.size) || 0,
+      Number(item.editRevision) || 0,
+      Number(item.videoPosterRevision) || 0,
+    ].join(":");
+  const items = [
+    ...(Array.isArray(ids) ? ids : [])
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0)
+      .slice(0, maxItems),
+  ]
+    .map((id) => lib.getItem(id))
+    .filter(Boolean);
+  if (!items.length) return null;
+  const expectedVersions = items.map(itemVersion);
+  const pageSize = cell * cols;
+  const signature = crypto
+    .createHash("sha1")
+    .update(
+      expectedVersions.join("|") + `@v${ATLAS_FORMAT_VERSION}@${cell}@${cols}`,
+    )
+    .digest("hex")
+    .slice(0, 24);
+  const dir = path.join(THUMB_DIR, "atlas");
+  const outPath = path.join(dir, `${signature}.webp`);
+  const manifestPath = path.join(dir, `${signature}.json`);
+  if (exists(outPath) && exists(manifestPath)) return outPath;
+  const existing = atlasInflight.get(signature);
+  if (existing) return existing;
+
+  let partPath = "";
+  let manifestPartPath = "";
+  const itemsStillCurrent = () =>
+    items.every((item, index) => {
+      const current = lib.getItem(item.id);
+      return current && itemVersion(current) === expectedVersions[index];
+    });
+  const job = (async () => {
+    await fsp.mkdir(dir, { recursive: true });
+    /* 上次可能在图片改名后、清单写入前退出。没有清单的页无法安全失效，
+       不要直接复用。 */
+    if (exists(outPath) && !exists(manifestPath)) {
+      await fsp.rm(outPath, { force: true }).catch(() => {});
+    }
+    const layers = [];
+    let next = 0;
+    let missing = 0;
+    const workers = Array.from(
+      { length: Math.min(ATLAS_CONCURRENCY, items.length) },
+      async () => {
+        while (next < items.length) {
+          const index = next++;
+          const item = items[index];
+          const file = await ensureThumb(item, ATLAS_THUMB_SIZE, "inside", {
+            lane,
+          });
+          if (!file) {
+            missing += 1;
+            continue;
+          }
+          const resized = await sharp(file)
+            .resize(cell, cell, {
+              fit: "inside",
+              background: { r: 0, g: 0, b: 0, alpha: 0 },
+              withoutEnlargement: false,
+            })
+            .png()
+            .toBuffer({ resolveWithObject: true });
+          const col = index % cols;
+          const row = Math.floor(index / cols);
+          layers.push({
+            input: resized.data,
+            left: col * cell + Math.floor((cell - resized.info.width) / 2),
+            top: row * cell + Math.floor((cell - resized.info.height) / 2),
+          });
+        }
+      },
+    );
+    await Promise.all(workers);
+    /* 一张图集会把整页标记为“已有预览”。只要有一格没生成，
+       就不能返回带透明洞的半成品，否则这一格会遮住逐张 L0 回退。 */
+    if (missing) return null;
+    /* 生成过程中原图可能刚好被替换 / 删除。落盘前再核一次版本，
+       避免旧任务在失效后把已经过期的图集重新写回来。 */
+    if (!itemsStillCurrent()) return null;
+    partPath = `${outPath}.${process.pid}.${Date.now()}.part`;
+    await sharp({
+      create: {
+        width: pageSize,
+        height: pageSize,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .composite(layers)
+      .webp({ quality: 72, alphaQuality: 80 })
+      .toFile(partPath);
+    await fsp.rename(partPath, outPath);
+    partPath = "";
+    if (!itemsStillCurrent()) {
+      await fsp.rm(outPath, { force: true }).catch(() => {});
+      return null;
+    }
+    manifestPartPath = `${manifestPath}.${process.pid}.${Date.now()}.part`;
+    await fsp.writeFile(
+      manifestPartPath,
+      JSON.stringify({
+        version: ATLAS_FORMAT_VERSION,
+        itemIds: items.map((item) => Number(item.id)),
+        cellSize: cell,
+        columns: cols,
+      }),
+    );
+    await fsp.rename(manifestPartPath, manifestPath);
+    manifestPartPath = "";
+    return outPath;
+  })();
+  atlasInflight.set(signature, job);
+  try {
+    return await job;
+  } catch (err) {
+    if (partPath) await fsp.rm(partPath, { force: true }).catch(() => {});
+    if (manifestPartPath)
+      await fsp.rm(manifestPartPath, { force: true }).catch(() => {});
+    if (!exists(manifestPath))
+      await fsp.rm(outPath, { force: true }).catch(() => {});
+    throw err;
+  } finally {
+    if (atlasInflight.get(signature) === job) atlasInflight.delete(signature);
+  }
 }
 
 async function ensurePhotoWallThumb(item, size, crop = null) {
@@ -1126,6 +1296,7 @@ async function viewableFile(item) {
 
 module.exports = {
   ensureThumb,
+  ensureThumbAtlas,
   thumbScheduler,
   isThumbJobCancelled,
   ensurePhotoWallThumb,

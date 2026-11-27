@@ -183,7 +183,7 @@ body.is-location-assign .maplibregl-canvas {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  color: #1d2631;
+  color: var(--globe-ink);
   background: var(--globe-control-surface);
   box-shadow: inset 0 0 0 0.5px var(--globe-control-outline);
   cursor: pointer;
@@ -218,7 +218,7 @@ body.is-location-assign .maplibregl-canvas {
   overflow: visible;
   border: 0;
   border-radius: 22px;
-  color: #1d2631;
+  color: var(--globe-ink);
   background: var(--globe-control-surface);
   box-shadow: inset 0 0 0 0.5px var(--globe-control-outline);
   -webkit-backdrop-filter: blur(12px) saturate(135%);
@@ -261,7 +261,7 @@ body.is-location-assign .maplibregl-canvas {
 }
 
 .globe-place-search input::placeholder {
-  color: rgba(29, 38, 49, 0.48);
+  color: var(--globe-muted);
 }
 
 .globe-place-search-submit {
@@ -351,7 +351,7 @@ body.is-location-assign .maplibregl-canvas {
   padding: 9px 11px;
   border: 0;
   border-radius: 10px;
-  color: #1d2631;
+  color: var(--globe-ink);
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -375,7 +375,7 @@ body.is-location-assign .maplibregl-canvas {
 .globe-place-search-result-detail {
   overflow: hidden;
   max-width: 100%;
-  color: rgba(29, 38, 49, 0.54);
+  color: var(--globe-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -406,6 +406,20 @@ body.is-location-assign .maplibregl-canvas {
   width: 21px;
   height: 21px;
   display: block;
+}
+
+.globe-type-toggle > svg > rect {
+  stroke: currentColor;
+  stroke-width: 1.9;
+}
+
+/* 卫星影像的明暗变化很大，统一加深玻璃底并把图标提亮，
+   避免 44px 圆钮只剩底色、看不出当前可切换到哪种地图。 */
+body.is-satellite
+  :is(.globe-type-toggle, .globe-compass-button, .globe-close-button) {
+  color: #f8fafc;
+  background: rgba(18, 26, 34, 0.44);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.26);
 }
 
 .globe-compass-button svg {
@@ -761,11 +775,13 @@ body.is-satellite .globe-notice {
 .pm-photo-icon img {
   display: block;
   position: relative;
-  /* 照片压在定位柔光之上：两者都在同一个标记里，靠层级决定谁遮住谁。 */
+  /* 照片压在定位闪光之上：两者都在同一个标记里，靠层级决定谁遮住谁。 */
   z-index: 1;
   border: 2px solid var(--photo-marker-paper);
   border-radius: 4px;
   background: var(--photo-marker-paper);
+  background-position: center;
+  background-size: cover;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
   transform-origin: 50% 100%;
   transition: none;
@@ -873,9 +889,9 @@ body.is-location-assign .globe-attribution {
   }
 }
 
-/* 点击照片栏里的照片、飞行定位到之后的确认：一圈柔光紧贴照片边缘
-   向外发散再收掉，说明“就是这一张”。柔光节点由 pingMarker() 插在
-   img 之前，因此始终画在照片后面，只描边发光、不遮挡缩略图。 */
+/* 点击照片栏里的照片、飞行定位到之后的确认：轮廓紧贴照片边缘，
+   原地连续闪两次，说明“就是这一张”。节点由 flashMarker() 插在
+   img 之前，因此始终画在照片后面，不遮挡缩略图。 */
 .pm-ping {
   --pm-ping-color: var(--accent, #0a84ff);
   --pm-ping-glow: color-mix(in srgb, var(--accent, #0a84ff) 45%, transparent);
@@ -887,45 +903,43 @@ body.is-location-assign .globe-attribution {
 
 .pm-ping-halo {
   position: absolute;
-  /* 和照片的边框盒完全重合：柔光从照片边缘起散，
-     不留缝隙，否则读起来像一个独立浮在照片外的框。 */
+  /* 和照片的边框盒完全重合：闪光只贴着照片边缘，
+     不留缝隙，也不会向外扩成水波。 */
   inset: 0;
   z-index: 1;
   border-radius: 4px;
   opacity: 0;
-  transform: scale(0.98);
-  transform-origin: 50% 50%;
-  /* 描边落在照片边缘上，光晕只往外走，贴边感靠这两层近光撑住。 */
+  /* 描边落在照片边缘上，光只从边缘轻轻溢出。 */
   box-shadow:
     0 0 0 1.5px var(--pm-ping-color),
-    0 0 12px 1px var(--pm-ping-glow),
-    0 0 26px 6px var(--pm-ping-glow);
+    0 0 12px 2px var(--pm-ping-glow),
+    0 0 28px 7px var(--pm-ping-glow);
   pointer-events: none;
 }
 
 .pm-ping.on .pm-ping-halo {
-  /* 唯一的定位反馈：亮得果断，收得从容。 */
-  animation: pmPingHalo 600ms var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1))
-    both;
+  animation: pmPhotoFlashTwice 520ms
+    var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)) both;
 }
 
-@keyframes pmPingHalo {
+@keyframes pmPhotoFlashTwice {
   0% {
-    /* 起手略小于照片：描边藏在照片边缘底下，
-       看起来是从照片边“渗出来”而不是凭空出现一个框。 */
-    transform: scale(0.98);
     opacity: 0;
-    /* 亮起要果断：起手用快曲线。 */
-    animation-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
   }
-  20% {
+  12% {
     opacity: 1;
-    /* 收掉要从容：整段 ease-out 会让中段一下子就淡掉，
-       这里换成对称曲线，让柔光在最亮处多停一会儿。 */
-    animation-timing-function: cubic-bezier(0.33, 0, 0.55, 1);
   }
+  34% {
+    opacity: 0;
+  }
+  44% {
+    opacity: 0;
+  }
+  56% {
+    opacity: 1;
+  }
+  84%,
   100% {
-    transform: scale(1.15);
     opacity: 0;
   }
 }
@@ -960,14 +974,14 @@ body.is-satellite .pm-ping {
     animation: none;
   }
 
-  /* 减少动态时连那一点轻微的放大也去掉，只保留一次不透明度短闪：
-     仍然看得出选中的是哪一张，但没有任何位移。 */
+  /* 减少动态时只保留一次不透明度短闪：
+     仍然看得出选中的是哪一张，但减弱重复闪烁。 */
   .pm-ping.on .pm-ping-halo {
-    transform: scale(1);
-    animation: pmPingHaloReduced 220ms ease-out both;
+    animation: pmPhotoFlashReduced 220ms
+      var(--ease-out, cubic-bezier(0.23, 1, 0.32, 1)) both;
   }
 
-  @keyframes pmPingHaloReduced {
+  @keyframes pmPhotoFlashReduced {
     0% {
       opacity: 0;
     }

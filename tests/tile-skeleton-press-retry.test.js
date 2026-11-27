@@ -25,11 +25,11 @@ test("未加载瓷砖有微光骨架，解码后淡入并停掉微光", () => {
   );
   assert.match(
     styles,
-    /\.photo-grid \.tile \.crop > img:not\(\.gallery-full-overlay\) \{[\s\S]*?opacity: 0;/,
+    /\.photo-grid\s+\.tile\s+\.crop\s*>\s*img:not\(\.gallery-full-overlay\):not\(\.gallery-thumb-l0\)\s*\{[\s\S]*?opacity: 0;/,
   );
   assert.match(
     styles,
-    /\.photo-grid \.tile\.is-media-ready \.crop > img:not\(\.gallery-full-overlay\) \{[\s\S]*?opacity: 1;/,
+    /\.photo-grid\s+\.tile\.is-media-ready\s+\.crop\s*>\s*img:not\(\.gallery-full-overlay\):not\(\.gallery-thumb-l0\)\s*\{[\s\S]*?opacity: 1;/,
   );
   assert.match(styles, /@keyframes tile-shimmer-sweep/);
   /* 骨架几何与 img 一致：原始比例模式只覆盖照片实际区域 */
@@ -125,6 +125,9 @@ test("失败标签与重试按钮有英文文案，窗口回收会清掉重试�
     app.indexOf("function unloadGalleryWindowImage"),
     app.indexOf("function resetGalleryImageWindow"),
   );
-  assert.match(unload, /classList\.remove\("is-media-ready", "is-load-failed"\)/);
+  assert.match(
+    unload,
+    /classList\.remove\("is-media-ready", "is-load-failed"\)/,
+  );
   assert.match(unload, /querySelector\("\.tile-retry"\)\?\.remove\(\)/);
 });

@@ -148,7 +148,7 @@ npm install
 npm start
 ```
 
-也可以在 Windows 中双击 `启动Fotora.cmd`。首次运行需要联网安装依赖。
+也可以在 Windows 中双击 `Fotora Optimize启动.cmd`。首次运行需要联网安装依赖。
 
 ## 项目结构
 

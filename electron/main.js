@@ -500,6 +500,14 @@ function scheduleRendererRecovery(source, details) {
     try {
       const url = new URL(mainWindow.webContents.getURL());
       url.searchParams.set("fotora_recover", "1");
+      url.searchParams.set(
+        "fotora_recover_attempt",
+        String(rendererRecoveryAttempts),
+      );
+      url.searchParams.set(
+        "fotora_recover_reason",
+        String(details?.reason || "crashed"),
+      );
       mainWindow.webContents.loadURL(url.toString());
     } catch {
       mainWindow.webContents.reload();
@@ -1623,7 +1631,12 @@ function createWindow(port) {
       devReloadTimer = setTimeout(() => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         console.log("[dev] 界面文件已更新，刷新窗口");
-        mainWindow.webContents.reloadIgnoringCache();
+        const url = new URL(mainWindow.webContents.getURL());
+        url.searchParams.set("dev", String(Date.now()));
+        url.searchParams.set("fotora_recover", "1");
+        url.searchParams.set("fotora_recover_attempt", "1");
+        url.searchParams.set("fotora_recover_reason", "dev-reload");
+        void mainWindow.webContents.loadURL(url.toString());
       }, 120);
     };
     try {

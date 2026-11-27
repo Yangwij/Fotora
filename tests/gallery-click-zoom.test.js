@@ -15,9 +15,9 @@ test("图库网格提供适合大量缩略图的五档，并从标准档启动",
   assert.match(app, /photoZoom: 4/);
   assert.match(app, /const GALLERY_STANDARD_ZOOM = 4;/);
   assert.match(app, /const GALLERY_ZOOM_MAX = 5;/);
-  assert.match(styles, /\.photo-grid\.gallery-zoom-1[\s\S]*?\* 0\.16\)/);
-  assert.match(styles, /\.photo-grid\.gallery-zoom-2[\s\S]*?\* 0\.3\)/);
-  assert.match(styles, /\.photo-grid\.gallery-zoom-3[\s\S]*?\* 0\.52\)/);
+  assert.match(styles, /\.photo-grid\.gallery-zoom-1[\s\S]*?\* 0\.32\)/);
+  assert.match(styles, /\.photo-grid\.gallery-zoom-2[\s\S]*?\* 0\.46\)/);
+  assert.match(styles, /\.photo-grid\.gallery-zoom-3[\s\S]*?\* 0\.64\)/);
   assert.match(styles, /\.photo-grid\.gallery-zoom-5[\s\S]*?repeat\(4, minmax/);
 });
 

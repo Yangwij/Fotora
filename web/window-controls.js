@@ -13,7 +13,6 @@
     )) {
       const label = maximized ? "还原窗口" : "最大化窗口";
       button.setAttribute("aria-label", label);
-      button.title = maximized ? "还原" : "最大化";
     }
   };
   const setFullscreen = (value) => {

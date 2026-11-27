@@ -45,6 +45,8 @@
     已取消导入: "Import canceled",
     已取消导入图库: "Library import canceled",
     已取消导出: "Export canceled",
+    "上次播放视图未能稳定恢复，已安全返回":
+      "The previous playback view could not be restored safely.",
     这次导入已经结束: "This import has already finished.",
     先按顺序选择照片或视频:
       "Select photos or videos in the required order first.",
@@ -339,8 +341,17 @@
     恢复默认封面: "Restore default cover",
     设为视频封面: "Set as video cover",
     "正在准备照片…": "Preparing photo…",
+    编辑工具: "Editing tools",
+    裁剪: "Crop",
+    几何: "Geometry",
     裁剪比例: "Crop aspect",
     自由裁剪: "Free Crop",
+    逆时针旋转: "Rotate counterclockwise",
+    顺时针旋转: "Rotate clockwise",
+    水平镜像: "Flip horizontally",
+    拉直: "Straighten",
+    拉直角度: "Straighten angle",
+    重置几何: "Reset geometry",
     原始: "Original",
     横: "Landscape",
     竖: "Portrait",
@@ -536,8 +547,8 @@
     位置筛选: "Filter by Location",
     媒体筛选: "Filter by Media",
     设备筛选: "Filter by Camera",
-    类型筛选: "Filter by Format",
-    类型过滤: "Filter by File Extension",
+    媒体类型: "Media Type",
+    文件格式: "File Format",
     批量编号: "Batch Renumber",
     相簿更名: "Rename Album",
     删除相簿: "Delete Album",
@@ -962,11 +973,13 @@
     match = core.match(/^保存照片位置失败：(.+)$/);
     if (match)
       return `${leading}Couldn’t save the photo location: ${match[1]}${trailing}`;
-    match = core.match(/^第\s+(\d+)\s+张，共\s+(\d+)\s+张$/);
+    match = core.match(/^第\s+([\d,]+)\s+张，共\s+([\d,]+)\s+张$/);
     if (match) {
       return `${leading}Photo ${match[1]} of ${match[2]}${trailing}`;
     }
-    match = core.match(/^第\s+(\d+)\s+到\s+(\d+)\s+张，共\s+(\d+)\s+张$/);
+    match = core.match(
+      /^第\s+([\d,]+)\s+到\s+([\d,]+)\s+张，共\s+([\d,]+)\s+张$/,
+    );
     if (match) {
       return `${leading}Photos ${match[1]} through ${match[2]} of ${match[3]}${trailing}`;
     }

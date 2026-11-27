@@ -22,6 +22,9 @@ const WEB_DIR = path.join(__dirname, "..", "web");
 const WINDOW_CONTROL_SCRIPT = path.join(__dirname, "window-control.ps1");
 const compatibilityVideoJobs = new Map();
 let compatibilityVideoQueue = Promise.resolve();
+/* 已加入数据库、但尚未完成首次快照提交的根目录。它们可以在后台扫描，
+   但不能被 activeRoot() 的“取第一个根目录”回退误当成用户可浏览图库。 */
+const unpublishedRootIds = new Set();
 /* ------------------------------------------------------------------
  * 自动更新：盯着根文件夹，只要磁盘上有变化就自己重扫一遍，
  * 并把版本号 +1，前端轮询到这个号变了就刷新界面 —— 界面上不再需要「重新扫描」按钮。
@@ -46,9 +49,15 @@ function activeRoot() {
   const roots = lib.listRoots();
   if (!roots.length) return null;
   const stored = Number(lib.getMeta("active_root_id"));
-  const current = roots.find((root) => Number(root.id) === stored);
+  const current = roots.find(
+    (root) =>
+      Number(root.id) === stored && !unpublishedRootIds.has(Number(root.id)),
+  );
   if (current) return current;
-  const fallback = roots[0];
+  const fallback = roots.find(
+    (root) => !unpublishedRootIds.has(Number(root.id)),
+  );
+  if (!fallback) return null;
   try {
     lib.setMeta("active_root_id", String(fallback.id));
   } catch {}
@@ -59,11 +68,16 @@ function activeRootId() {
   return activeRoot()?.id ?? null;
 }
 
+/* 列表类接口的根目录作用域。0 是一个永远不会匹配真实根目录的安全值，
+   用于首个图库尚未提交时返回空集合，而不是意外查询全部根目录。 */
+const browsableRootId = () => activeRootId() ?? 0;
+
 function setActiveRoot(rootId) {
   const root = lib
     .listRoots()
     .find((entry) => Number(entry.id) === Number(rootId));
   if (!root) throw new Error("根目录不存在");
+  unpublishedRootIds.delete(root.id);
   lib.setMeta("active_root_id", String(root.id));
   syncRootWatchers(root);
   return root;
@@ -110,9 +124,14 @@ const WATCH_RETRY_DELAY = 5000;
 /* 扫描排成一条队，免得两次扫描同时改库 */
 let scanChain = Promise.resolve();
 const scanJobs = new Map(); /* rootId -> 最近一次扫描 Promise */
-function scanSeries(rootId) {
+const metadataJobs = new Map(); /* rootId -> 可浏览后仍在整理元数据的 Promise */
+function scanSeries(rootId, options = {}) {
   const id = Number(rootId);
-  const run = scanChain.then(() => lib.scanRoot(rootId));
+  const run = scanChain.then(async () => {
+    const pendingMetadata = metadataJobs.get(id);
+    if (pendingMetadata) await pendingMetadata.catch(() => {});
+    return lib.scanRoot(rootId, options);
+  });
   scanJobs.set(id, run);
   const clearJob = () => {
     if (scanJobs.get(id) === run) scanJobs.delete(id);
@@ -121,9 +140,9 @@ function scanSeries(rootId) {
   scanChain = run.catch(() => {});
   return run;
 }
-async function scanAndBump(rootId) {
+async function scanAndBump(rootId, options = {}) {
   const before = lib.getLibrarySignature();
-  const result = await scanSeries(rootId);
+  const result = await scanSeries(rootId, options);
   const after = lib.getLibrarySignature();
   const changed = before !== after;
   if (changed) {
@@ -133,10 +152,47 @@ async function scanAndBump(rootId) {
   return { ...result, changed };
 }
 
+function startDeferredMetadata(rootId) {
+  const id = Number(rootId);
+  if (!Number.isInteger(id) || metadataJobs.has(id))
+    return metadataJobs.get(id);
+  const job = (async () => {
+    const before = lib.getLibrarySignature();
+    try {
+      await lib.readMetadata(id, { batchSize: 120 });
+      lib.finishMetadataEnrichment(id);
+      const after = lib.getLibrarySignature();
+      if (before !== after) {
+        bumpRootRevision(id);
+        nextCoverEpoch();
+      }
+    } catch (err) {
+      lib.finishMetadataEnrichment(id, {
+        error: err?.message || "后台整理暂时中断",
+      });
+      if (err?.code !== "SCAN_CANCELLED") {
+        console.error("[后台整理拍摄信息失败]", err?.message || String(err));
+      }
+    }
+  })();
+  metadataJobs.set(id, job);
+  const clearJob = () => {
+    if (metadataJobs.get(id) === job) metadataJobs.delete(id);
+  };
+  job.then(clearJob, clearJob);
+  return job;
+}
+
 const ROOT_IMPORT_SESSION_TTL_MS = 15 * 60 * 1000;
 const rootImportSessions = new Map();
 
-function rememberRootImport({ rootId, previousRootId, removeRoot }) {
+function rememberRootImport({
+  rootId,
+  previousRootId,
+  removeRoot,
+  publishRequired = true,
+}) {
+  if (publishRequired) unpublishedRootIds.add(Number(rootId));
   const importId = crypto.randomUUID();
   const timer = setTimeout(() => {
     rootImportSessions.delete(importId);
@@ -383,7 +439,9 @@ function assertLocalRequest(req) {
 const state = () => {
   const root = activeRoot();
   const rootId = root?.id ?? null;
-  const tree = lib.getTree(rootId);
+  const tree = root
+    ? lib.getTree(rootId)
+    : { roots: [], albums: [], favoriteCount: 0 };
   return {
     ...tree,
     roots: tree.roots.map((entry) => ({
@@ -392,9 +450,9 @@ const state = () => {
     })),
     activeRootId: rootId,
     revision: getRootRevision(rootId),
-    trashCount: lib.countTrash(rootId),
-    folderPrompts: lib.getPendingFolderPrompts(rootId),
-    scan: lib.getScanState(rootId),
+    trashCount: root ? lib.countTrash(rootId) : 0,
+    folderPrompts: root ? lib.getPendingFolderPrompts(rootId) : [],
+    scan: root ? lib.getScanState(rootId) : null,
     coverEpoch,
   };
 };
@@ -553,7 +611,12 @@ function compatibilityVideoResponse(item) {
 
 /* ------------------------------ 文件流 ------------------------------ */
 
-function sendFile(req, res, filePath, { cache = false } = {}) {
+function sendFile(
+  req,
+  res,
+  filePath,
+  { cache = false, immutable = false } = {},
+) {
   let stat;
   try {
     stat = fs.statSync(filePath);
@@ -566,12 +629,41 @@ function sendFile(req, res, filePath, { cache = false } = {}) {
   res.once("close", () => stream?.destroy());
   const type =
     MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+  const etag = `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const lastModified = stat.mtime.toUTCString();
   const headers = {
     "Content-Type": type,
     "Accept-Ranges": "bytes",
-    "Cache-Control": cache ? "public, max-age=86400" : "no-cache",
+    "Cache-Control": immutable
+      ? "public, max-age=31536000, immutable"
+      : cache
+        ? "public, max-age=86400"
+        : "no-cache",
+    ETag: etag,
+    "Last-Modified": lastModified,
   };
   const range = req.headers.range;
+  /* 普通静态文件仍要求校验，但命中 ETag / 修改时间时只回 304，
+     不会再把整张图片或整份脚本重新传一遍。带内容版本的缩略图和大图
+     直接使用 immutable，同一地址在状态未变化时不应再次访问磁盘。 */
+  if (!range) {
+    const ifNoneMatch = String(req.headers["if-none-match"] || "")
+      .split(",")
+      .map((value) => value.trim());
+    const ifModifiedSince = Date.parse(
+      String(req.headers["if-modified-since"] || ""),
+    );
+    if (
+      ifNoneMatch.includes(etag) ||
+      ifNoneMatch.includes("*") ||
+      (!ifNoneMatch[0] &&
+        Number.isFinite(ifModifiedSince) &&
+        Math.floor(stat.mtimeMs / 1000) * 1000 <= ifModifiedSince)
+    ) {
+      res.writeHead(304, headers);
+      return res.end();
+    }
+  }
   if (range) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(String(range).trim());
     if (!m || (!m[1] && !m[2])) {
@@ -674,23 +766,35 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === "/api/library/items" && req.method === "GET") {
-    return json(res, { items: lib.getLibraryItems(activeRootId()) });
+    return json(res, { items: lib.getLibraryItems(browsableRootId()) });
+  }
+
+  if (pathname === "/api/locations/stream" && req.method === "GET") {
+    const after = Math.max(0, Number(url.searchParams.get("after")) || 0);
+    const limit = Math.max(
+      1,
+      Math.min(500, Number(url.searchParams.get("limit")) || 250),
+    );
+    return json(
+      res,
+      lib.getLocationItemsAfter(browsableRootId(), after, limit),
+    );
   }
 
   /* 地点页需要照片和视频的 GPS，但它和未添加位置网格共用同一份
      当前图库快照；隐藏、最近删除和实况伴生视频已在查询中排除。 */
   if (pathname === "/api/locations/items" && req.method === "GET") {
-    return json(res, { items: lib.getLibraryItems(activeRootId()) });
+    return json(res, { items: lib.getLibraryItems(browsableRootId()) });
   }
 
   /* 四种照片墙共享一次相簿树和照片快照，避免进入资料库时重复全量查询。 */
   if (pathname === "/api/walls/albums" && req.method === "GET") {
-    return json(res, lib.listWallAlbums(activeRootId()));
+    return json(res, lib.listWallAlbums(browsableRootId()));
   }
 
   /* 左侧「收藏」：只读的项目集合，不复制、不移动磁盘上的文件。 */
   if (pathname === "/api/favorites/items" && req.method === "GET") {
-    const items = lib.getFavoriteItems(activeRootId()).map((it) => ({
+    const items = lib.getFavoriteItems(browsableRootId()).map((it) => ({
       ...it,
       ext: path.extname(it.path).toLowerCase(),
       original: thumbs.canViewOriginal(it.path),
@@ -700,7 +804,7 @@ async function handleApi(req, res, url) {
 
   /* 照片墙资料库：叶子相簿即时镜像，不在数据库里复制相簿或照片。 */
   if (pathname === "/api/photo-wall/albums" && req.method === "GET") {
-    return json(res, { albums: lib.listPhotoWallAlbums(activeRootId()) });
+    return json(res, { albums: lib.listPhotoWallAlbums(browsableRootId()) });
   }
 
   if (pathname === "/api/photo-wall/photos" && req.method === "GET") {
@@ -710,7 +814,7 @@ async function handleApi(req, res, url) {
       : [];
     const items = lib.getPhotoWallPhotos(
       albumIds.length ? albumIds : null,
-      activeRootId(),
+      browsableRootId(),
     );
     return json(res, { items });
   }
@@ -728,7 +832,7 @@ async function handleApi(req, res, url) {
 
   /* 纵向画廊与错落磁贴使用同一批相簿身份，但比例和裁剪记录完全独立。 */
   if (pathname === "/api/masonry-wall/albums" && req.method === "GET") {
-    return json(res, { albums: lib.listMasonryWallAlbums(activeRootId()) });
+    return json(res, { albums: lib.listMasonryWallAlbums(browsableRootId()) });
   }
 
   if (pathname === "/api/masonry-wall/photos" && req.method === "GET") {
@@ -739,7 +843,7 @@ async function handleApi(req, res, url) {
     return json(res, {
       items: lib.getMasonryWallPhotos(
         albumIds.length ? albumIds : null,
-        activeRootId(),
+        browsableRootId(),
       ),
       ratios: ["9:16", "2:3", "3:4", "1:1", "4:3", "3:2", "16:9"],
     });
@@ -757,7 +861,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === "/api/filmroll-wall/albums" && req.method === "GET") {
-    return json(res, { albums: lib.listFilmrollWallAlbums(activeRootId()) });
+    return json(res, { albums: lib.listFilmrollWallAlbums(browsableRootId()) });
   }
 
   if (pathname === "/api/filmroll-wall/photos" && req.method === "GET") {
@@ -768,7 +872,7 @@ async function handleApi(req, res, url) {
     return json(res, {
       items: lib.getFilmrollWallPhotos(
         albumIds.length ? albumIds : null,
-        activeRootId(),
+        browsableRootId(),
       ),
       ratios: ["9:16", "2:3", "3:4", "1:1", "4:3", "3:2", "16:9"],
     });
@@ -786,7 +890,7 @@ async function handleApi(req, res, url) {
   }
 
   if (pathname === "/api/mosaic-wall/albums" && req.method === "GET") {
-    return json(res, { albums: lib.listMosaicWallAlbums(activeRootId()) });
+    return json(res, { albums: lib.listMosaicWallAlbums(browsableRootId()) });
   }
 
   if (pathname === "/api/mosaic-wall/photos" && req.method === "GET") {
@@ -797,7 +901,7 @@ async function handleApi(req, res, url) {
     return json(res, {
       items: lib.getMosaicWallPhotos(
         albumIds.length ? albumIds : null,
-        activeRootId(),
+        browsableRootId(),
       ),
       ratios: [
         "9:16",
@@ -878,7 +982,9 @@ async function handleApi(req, res, url) {
             .albums.flatMap((album) => album.coverIds || []),
         ),
       ];
-      const cleared = lib.dropItemCaches(coverIds);
+      const cleared = lib.dropItemCaches(coverIds, {
+        invalidateAtlas: false,
+      });
       await warmCoverThumbs(coverIds);
       /* 等封面都生成好再换版本号，别的窗口轮询到新号时缓存已经就绪。 */
       if (force && !changedRoots.has(Number(rootId))) bumpRootRevision(rootId);
@@ -990,8 +1096,19 @@ async function handleApi(req, res, url) {
 
   if (pathname === "/api/imports/complete" && req.method === "POST") {
     const body = await readBody(req);
-    takeRootImport(body.importId);
-    return json(res, { ok: true });
+    const session = takeRootImport(body.importId);
+    const rootId = Number(session?.rootId ?? body.rootId);
+    const root = lib.listRoots().find((entry) => Number(entry.id) === rootId);
+    if (!root) return fail(res, "导入的图库已经不存在", 404);
+    if (lib.getScanState(root.id)?.running) {
+      return fail(res, "图库仍在导入，完成后才能切换", 409);
+    }
+    /* 后台导入期间继续停留在旧图库，等扫描完成且前端允许切换时，
+       才让新图库成为活动根目录。这样地图、查看器和照片墙不会在
+       扫描期间读到“前端还是旧库、服务端却已经换库”的混合状态。 */
+    unpublishedRootIds.delete(root.id);
+    setActiveRoot(root.id);
+    return json(res, { ok: true, state: state() });
   }
 
   if (pathname === "/api/imports/cancel" && req.method === "POST") {
@@ -999,11 +1116,14 @@ async function handleApi(req, res, url) {
     const session = takeRootImport(body.importId);
     if (!session) return fail(res, "这次导入已经结束", 409);
     const rootId = session.rootId;
+    unpublishedRootIds.delete(rootId);
     unwatchRoot(rootId);
     lib.requestScanCancel(rootId);
     const scanJob = scanJobs.get(rootId);
     if (scanJob) await scanJob.catch(() => {});
-    else lib.clearScanCancellation(rootId);
+    const metadataJob = metadataJobs.get(rootId);
+    if (metadataJob) await metadataJob.catch(() => {});
+    lib.clearScanCancellation(rootId);
 
     if (session.removeRoot) {
       const stillExists = lib
@@ -1049,14 +1169,19 @@ async function handleApi(req, res, url) {
           rootId: root.id,
           previousRootId: activeRootId(),
           removeRoot: !existing,
+          publishRequired: !existing,
         });
-        const scan = scanAndBump(root.id);
+        const scan = scanAndBump(root.id, { deferMetadata: true }).then(
+          (result) => {
+            if (result.metadataDeferred) startDeferredMetadata(root.id);
+            return result;
+          },
+        );
         scan.catch((err) => {
           if (err?.code !== "SCAN_CANCELLED") {
             console.error("[后台导入失败]", err.message || String(err));
           }
         });
-        setActiveRoot(root.id);
         return json(res, {
           root,
           result: null,
@@ -1537,7 +1662,10 @@ async function handleApi(req, res, url) {
       fit,
     );
     if (!file) return fail(res, "这个格式暂时做不出缩略图", 415);
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   /* 从「最近删除」还原选中的照片、视频或整个相簿 */
@@ -1824,9 +1952,13 @@ async function handleApi(req, res, url) {
     req.once("close", onClose);
     let file = null;
     try {
-      /* 不传 lane：可见区请求默认就是前台，优先级最高。 */
+      /* 普通格子请求默认走前台。只有 L0 全库预热会显式带背景标记，
+         它可以用空闲名额生成，不能拖慢用户正在看的那一屏。 */
       file = await thumbs.ensureThumb(item, size, fit, {
         signal: controller.signal,
+        ...(url.searchParams.get("lane") === "background"
+          ? { lane: "background" }
+          : {}),
       });
     } catch (err) {
       /* 用户已经滚走了，这一格没人要了：静默收场，不写响应也不记日志。 */
@@ -1845,7 +1977,31 @@ async function handleApi(req, res, url) {
       }
       return fail(res, "这个格式暂时做不出缩略图", 415);
     }
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
+  }
+
+  if (pathname === "/api/thumbs/atlas" && req.method === "GET") {
+    const ids = String(url.searchParams.get("ids") || "")
+      .split(",")
+      .map(Number)
+      .filter((id) => Number.isInteger(id) && id > 0);
+    if (!ids.length) return fail(res, "没有需要合成的微型预览");
+    const file = await thumbs.ensureThumbAtlas(ids, {
+      cellSize: Number(url.searchParams.get("cell")) || 64,
+      columns: Number(url.searchParams.get("cols")) || 8,
+      lane:
+        url.searchParams.get("lane") === "background"
+          ? "background"
+          : "interactive",
+    });
+    if (!file) return fail(res, "这些项目暂时无法生成微型预览", 415);
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   /* 缩略图预热：前端滚到哪里，就先给哪里生成，剩下的在后台慢慢补。
@@ -1911,7 +2067,10 @@ async function handleApi(req, res, url) {
     const crop = lib.getPhotoWallCrop(item.id);
     const file = await thumbs.ensurePhotoWallThumb(item, size, crop);
     if (!file) return fail(res, "这个格式暂时做不出照片墙缩略图", 415);
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   if (parts[1] === "masonry-wall" && parts[2] === "thumb" && parts[3]) {
@@ -1921,7 +2080,10 @@ async function handleApi(req, res, url) {
     const crop = lib.getMasonryWallCrop(item.id);
     const file = await thumbs.ensureMasonryWallThumb(item, size, crop);
     if (!file) return fail(res, "这个格式暂时做不出纵向画廊缩略图", 415);
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   if (parts[1] === "filmroll-wall" && parts[2] === "thumb" && parts[3]) {
@@ -1931,7 +2093,10 @@ async function handleApi(req, res, url) {
     const crop = lib.getFilmrollWallCrop(item.id);
     const file = await thumbs.ensureFilmrollWallThumb(item, size, crop);
     if (!file) return fail(res, "这个格式暂时做不出横向胶卷缩略图", 415);
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   if (parts[1] === "mosaic-wall" && parts[2] === "thumb" && parts[3]) {
@@ -1941,7 +2106,10 @@ async function handleApi(req, res, url) {
     const crop = lib.getMosaicWallCrop(item.id);
     const file = await thumbs.ensureMosaicWallThumb(item, size, crop);
     if (!file) return fail(res, "这个格式暂时做不出嵌合拼图缩略图", 415);
-    return sendFile(req, res, file, { cache: true });
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   if (parts[1] === "opening" && parts[2]) {
@@ -1950,9 +2118,12 @@ async function handleApi(req, res, url) {
     if (item.kind !== "video") return fail(res, "这不是视频", 400);
     const file = await thumbs.videoOpeningPoster(item);
     if (!file) return fail(res, "这个视频暂时抽不出开场画面", 415);
-    /* URL 已经带视频修改时间；仍然要求浏览器校验，避免服务端封面被
-       重建后，用户继续命中同一地址的旧磁盘缓存。 */
-    return sendFile(req, res, file);
+    /* URL 已经带视频修改时间和封面版本；封面重建会换地址，同一地址
+       可以直接长期命中，不必每次播放前再校验一遍。 */
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   if (parts[1] === "file" && parts[2]) {
@@ -1970,7 +2141,10 @@ async function handleApi(req, res, url) {
     if (!item) return fail(res, "文件不存在", 404);
     const file = await thumbs.viewableFile(item);
     if (!file) return fail(res, "这个格式没法在浏览器里显示", 415);
-    return sendFile(req, res, file);
+    return sendFile(req, res, file, {
+      cache: true,
+      immutable: url.searchParams.has("v"),
+    });
   }
 
   /* 浏览器播不了的视频（比如 HEVC 编码的 MOV），交给系统默认播放器打开 */
@@ -2077,7 +2251,14 @@ function start({ port = PORT, open = false } = {}) {
       console.log("关掉这个窗口就是关闭相簿。");
       /* 只监听当前图库；其他图库在切换时先完整扫描，再成为监听目标。 */
       const currentRoot = activeRoot();
-      if (currentRoot) watchRoot(currentRoot);
+      if (currentRoot) {
+        watchRoot(currentRoot);
+        if (lib.countPendingMetadata(currentRoot.id) > 0) {
+          startDeferredMetadata(currentRoot.id);
+        } else {
+          lib.markMetadataReady(currentRoot.id);
+        }
+      }
       if (open) openBrowser(address);
       resolve({ server, port: actualPort, address, stop });
     };
@@ -2098,11 +2279,21 @@ function stop() {
     clearTimeout(session.timer);
   }
   rootImportSessions.clear();
-  if (!server.listening) return Promise.resolve();
-  return new Promise((resolve) => {
-    server.close(() => resolve());
-    server.closeAllConnections?.();
-  });
+  for (const rootId of new Set([...scanJobs.keys(), ...metadataJobs.keys()])) {
+    lib.requestScanCancel(rootId);
+  }
+  const backgroundFinished = Promise.allSettled([
+    ...scanJobs.values(),
+    ...metadataJobs.values(),
+  ]);
+  const closeServer = () => {
+    if (!server.listening) return Promise.resolve();
+    return new Promise((resolve) => {
+      server.close(() => resolve());
+      server.closeAllConnections?.();
+    });
+  };
+  return backgroundFinished.then(closeServer);
 }
 
 if (require.main === module) {

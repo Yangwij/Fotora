@@ -693,6 +693,10 @@ function defaultScanState() {
     total: 0,
     message: "尚未扫描",
     finishedAt: null,
+    browsable: false,
+    browsableAt: null,
+    metadataRunning: false,
+    metadataReady: false,
   };
 }
 
@@ -749,6 +753,19 @@ function getScanState(rootId = lastScanRootId) {
     if (state.running) return { ...state };
   }
   return defaultScanState();
+}
+
+function countPendingMetadata(rootId) {
+  const id = Number(rootId);
+  if (!Number.isInteger(id)) return 0;
+  return Number(
+    openDb()
+      .prepare(
+        `SELECT COUNT(*) AS n FROM items
+         WHERE root_id = ? AND meta_state = 'pending' AND ignored_at = 0`,
+      )
+      .get(id).n,
+  );
 }
 
 /* 给当前索引拍一张「指纹」：根目录、相簿、媒体文件的路径 / 名称 / 大小 /
@@ -963,7 +980,7 @@ function getLibrarySignature() {
    相簿封面还是会一直读到上一次生成的旧图；视频首帧
    （<id>-first.jpg）以及旧版开场封面缓存也必须一起失效。
    换根目录时 SQLite 也可能复用 item id，所以成批清理时按 id 集合一次扫完。 */
-function dropItemCaches(itemIds) {
+function dropItemCaches(itemIds, { invalidateAtlas = true } = {}) {
   const ids = new Set((itemIds || []).map(Number).filter(Number.isInteger));
   if (!ids.size) return 0;
   let removed = 0;
@@ -1026,19 +1043,30 @@ function dropItemCaches(itemIds) {
       }
     }
   } catch {}
-  for (const id of ids) {
-    for (const name of [
-      `${id}.jpg`,
-      `${id}-full.jpg`,
-      `${id}-opening.jpg`,
-      `${id}-first.jpg`,
-    ]) {
+  const mosaicWallDir = path.join(THUMB_DIR, "mosaic-wall");
+  try {
+    for (const name of fs.readdirSync(mosaicWallDir)) {
+      const match = /^(\d+)-.+\.webp(?:\.part)?$/.exec(name);
+      if (match && ids.has(Number(match[1]))) {
+        try {
+          fs.rmSync(path.join(mosaicWallDir, name), { force: true });
+          removed += 1;
+        } catch {}
+      }
+    }
+  } catch {}
+  /* 预览目录不只放四张旧版固定图，还包括 RAW 内嵌预览的 raw-vN 版本、
+     全尺寸预览和临时文件。统一按文件名开头的项目 ID 清理。 */
+  try {
+    for (const name of fs.readdirSync(PREVIEW_DIR)) {
+      const match = /^(\d+)(?:-|\.)/.exec(name);
+      if (!match || !ids.has(Number(match[1]))) continue;
       try {
         fs.rmSync(path.join(PREVIEW_DIR, name), { force: true });
         removed += 1;
       } catch {}
     }
-  }
+  } catch {}
   try {
     for (const dirName of fs.readdirSync(EDIT_DIR)) {
       const dir = path.join(EDIT_DIR, dirName);
@@ -1058,6 +1086,49 @@ function dropItemCaches(itemIds) {
       }
     }
   } catch {}
+  /* 新图集页旁边有同名 JSON 清单，记录它包含哪些项目。只删除真正依赖
+     这些项目的页；没有清单的旧图集无法安全判断，仍按旧策略清掉一次。 */
+  if (invalidateAtlas) {
+    const atlasDir = path.join(THUMB_DIR, "atlas");
+    const removeAtlasPair = (name) => {
+      const base = name.replace(/\.json$/, "");
+      for (const filename of [`${base}.json`, `${base}.webp`]) {
+        try {
+          fs.rmSync(path.join(atlasDir, filename), { force: true });
+          if (filename.endsWith(".webp")) removed += 1;
+        } catch {}
+      }
+    };
+    try {
+      const names = fs.readdirSync(atlasDir);
+      const manifestBases = new Set(
+        names
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => name.slice(0, -".json".length)),
+      );
+      for (const name of names) {
+        if (!name.endsWith(".json")) continue;
+        let manifest = null;
+        try {
+          manifest = JSON.parse(
+            fs.readFileSync(path.join(atlasDir, name), "utf8"),
+          );
+        } catch {}
+        const itemIds = Array.isArray(manifest?.itemIds)
+          ? manifest.itemIds.map(Number)
+          : [];
+        if (itemIds.some((id) => ids.has(id))) removeAtlasPair(name);
+      }
+      /* 升级前生成的图集没有依赖清单。只要涉及真实失效，就一次清掉这些
+         无法证明安全的旧页；之后生成的页会走按页精确失效。 */
+      for (const name of names) {
+        if (!name.endsWith(".webp")) continue;
+        const base = name.slice(0, -".webp".length);
+        if (manifestBases.has(base)) continue;
+        removeAtlasPair(`${base}.json`);
+      }
+    } catch {}
+  }
   return removed;
 }
 
@@ -1866,21 +1937,35 @@ async function scanRoot(rootId, opts = {}) {
         .get(root.id).n,
     );
     updateScanState(root.id, { total: pendingCount, scanned: 0 });
+    if (opts.deferMetadata === true) {
+      const browsableAt = Date.now();
+      updateScanState(root.id, {
+        running: false,
+        phase: pendingCount ? "browsable" : "done",
+        browsable: true,
+        browsableAt,
+        metadataRunning: pendingCount > 0,
+        metadataReady: pendingCount === 0,
+        finishedAt: pendingCount ? null : browsableAt,
+        message: pendingCount
+          ? `照片已可浏览，正在后台整理其余 ${pendingCount.toLocaleString("zh-CN")} 个项目的拍摄信息`
+          : "图库已整理完成",
+      });
+      if (!pendingCount) clearScanCancellation(root.id);
+      return {
+        albums: seenAlbums.size,
+        createdAlbums,
+        items: discoveredItems,
+        removedAlbums: 0,
+        removedItems,
+        metadataParsed: 0,
+        metadataDeferred: pendingCount > 0,
+        pendingMetadata: pendingCount,
+        livePairs: 0,
+      };
+    }
     if (pendingCount) await readMetadata(root.id);
-    database
-      .prepare(
-        "UPDATE items SET meta_state = 'done' WHERE root_id = ? AND meta_state = 'pending'",
-      )
-      .run(root.id);
-    const livePairs = refreshLivePairs(root.id);
-
-    updateScanState(root.id, {
-      running: false,
-      phase: "done",
-      finishedAt: Date.now(),
-      message: `扫描完成：${discoveredItems} 个媒体文件`,
-    });
-    clearScanCancellation(root.id);
+    const livePairs = finishMetadataEnrichment(root.id);
     return {
       albums: seenAlbums.size,
       createdAlbums,
@@ -2153,10 +2238,13 @@ function toEpoch(value) {
   return new Date(y, mo - 1, d, h, mi, s).getTime();
 }
 
-async function readMetadata(rootId = lastScanRootId) {
+async function readMetadata(
+  rootId = lastScanRootId,
+  { batchSize = 500, onBatch = null } = {},
+) {
   /* 参数走 @argfile，不受命令行长度限制。批次大一些可显著减少在 Windows
      上启动 ExifTool 的次数，同时输出仍远低于 512 MB 的缓冲区上限。 */
-  const BATCH = 500;
+  const BATCH = Math.max(1, Math.min(500, Number(batchSize) || 500));
   const database = openDb();
   const selectBatch = database.prepare(
     `SELECT id, path FROM items
@@ -2169,6 +2257,9 @@ async function readMetadata(rootId = lastScanRootId) {
     `UPDATE items SET width=?, height=?, taken_at=?, camera=?, lens=?, iso=?, f_number=?,
      exposure=?, focal=?, gps_lat=?, gps_lon=?, orientation=?, duration=?,
      fps=?, codec=?, content_id=? WHERE id=?`,
+  );
+  const markDone = database.prepare(
+    "UPDATE items SET meta_state = 'done' WHERE id = ? AND root_id = ?",
   );
   let lastId = -1;
   let processed = 0;
@@ -2226,6 +2317,7 @@ async function readMetadata(rootId = lastScanRootId) {
     try {
       parsed = JSON.parse(out || "[]");
     } catch {}
+    let batchCommitted = false;
     try {
       database.exec("BEGIN IMMEDIATE");
       /* exiftool 输出的路径是正斜杠，得统一了才能对上号 */
@@ -2289,15 +2381,37 @@ async function readMetadata(rootId = lastScanRootId) {
           id,
         );
       }
+      for (const row of slice) markDone.run(row.id, Number(rootId));
       database.exec("COMMIT");
+      batchCommitted = true;
     } catch {
       try {
         database.exec("ROLLBACK");
       } catch {}
       /* 这一批解析失败就跳过，界面照常显示 */
     }
+    if (!batchCommitted) {
+      /* 解析失败也把这批标记为已处理，避免它们永远卡住地图和其他后续能力。 */
+      try {
+        database.exec("BEGIN IMMEDIATE");
+        for (const row of slice) markDone.run(row.id, Number(rootId));
+        database.exec("COMMIT");
+      } catch {
+        try {
+          database.exec("ROLLBACK");
+        } catch {}
+      }
+    }
     processed += slice.length;
     updateScanState(rootId, { scanned: processed });
+    try {
+      await onBatch?.({
+        rootId: Number(rootId),
+        processed,
+        batchSize: slice.length,
+        lastId,
+      });
+    } catch {}
     try {
       fs.unlinkSync(argfile);
     } catch {}
@@ -2309,6 +2423,63 @@ async function readMetadata(rootId = lastScanRootId) {
       "UPDATE items SET taken_at = mtime WHERE root_id = ? AND taken_at IS NULL",
     )
     .run(Number(rootId));
+}
+
+function finishMetadataEnrichment(rootId, { error = null } = {}) {
+  const id = Number(rootId);
+  if (error) {
+    updateScanState(id, {
+      running: false,
+      phase: "browsable",
+      browsable: true,
+      metadataRunning: false,
+      metadataReady: false,
+      message: `照片可继续浏览，拍摄信息稍后重试：${String(error)}`,
+    });
+    clearScanCancellation(id);
+    return 0;
+  }
+  const database = openDb();
+  database
+    .prepare(
+      "UPDATE items SET meta_state = 'done' WHERE root_id = ? AND meta_state = 'pending'",
+    )
+    .run(id);
+  database
+    .prepare(
+      "UPDATE items SET taken_at = mtime WHERE root_id = ? AND taken_at IS NULL",
+    )
+    .run(id);
+  const livePairs = refreshLivePairs(id);
+  const state = scanStateFor(id);
+  updateScanState(id, {
+    running: false,
+    phase: "done",
+    browsable: true,
+    metadataRunning: false,
+    metadataReady: true,
+    finishedAt: Date.now(),
+    message: `整理完成：${Number(state.total || state.scanned || 0).toLocaleString("zh-CN")} 个媒体文件`,
+  });
+  clearScanCancellation(id);
+  return livePairs;
+}
+
+function markMetadataReady(rootId) {
+  const id = Number(rootId);
+  if (!Number.isInteger(id) || countPendingMetadata(id) > 0) return false;
+  const finishedAt = Date.now();
+  updateScanState(id, {
+    running: false,
+    phase: "done",
+    browsable: true,
+    browsableAt: scanStateFor(id).browsableAt || finishedAt,
+    metadataRunning: false,
+    metadataReady: true,
+    finishedAt,
+    message: "图库已整理完成",
+  });
+  return true;
 }
 
 /**
@@ -3983,7 +4154,7 @@ function getItems(albumId, { offset = 0, limit = 1000 } = {}) {
       `SELECT i.id, i.root_id AS rootId, i.album_id AS albumId,
             i.effective_name AS name, i.kind,
             i.size, i.mtime, i.width, i.height,
-            i.editRevision, i.videoPosterRevision,
+            i.meta_state AS metaState, i.editRevision, i.videoPosterRevision,
             i.effective_taken_at AS taken_at,
             COALESCE(m.added_seq, i.added_seq) AS addedSeq,
             (CASE WHEN i.favorite_at IS NOT NULL THEN 1 ELSE 0 END) AS favorite,
@@ -4320,7 +4491,7 @@ function getLibraryItems(rootId = null) {
       `SELECT i.id, i.root_id AS rootId, i.album_id AS albumId,
             i.effective_name AS name, i.kind,
             i.size, i.mtime, i.width, i.height,
-            i.editRevision, i.videoPosterRevision,
+            i.meta_state AS metaState, i.editRevision, i.videoPosterRevision,
             i.effective_taken_at AS taken_at, i.added_seq AS addedSeq,
             (CASE WHEN i.favorite_at IS NOT NULL THEN 1 ELSE 0 END) AS favorite,
             i.rating,
@@ -4352,6 +4523,60 @@ function getLibraryItems(rootId = null) {
        i.effective_name COLLATE NOCASE`,
     )
     .all(...(byRoot ? [id] : []));
+}
+
+/* 地图流式读取：按已完成的元数据 ID 顺序向前推进。
+   返回游标始终覆盖处理过的非 GPS 项目，避免它们把后续 GPS 项目挡住。 */
+function getLocationItemsAfter(rootId, afterId = 0, limit = 250) {
+  const id = Number(rootId);
+  const cursor = Math.max(0, Math.floor(Number(afterId) || 0));
+  const pageSize = Math.max(1, Math.min(500, Math.floor(Number(limit) || 250)));
+  if (!Number.isInteger(id))
+    return { items: [], nextAfter: cursor, complete: false };
+  const rows = openDb()
+    .prepare(
+      `SELECT i.id, i.root_id AS rootId, i.album_id AS albumId,
+            i.effective_name AS name, i.kind,
+            i.size, i.mtime, i.width, i.height,
+            i.editRevision, i.videoPosterRevision,
+            i.effective_taken_at AS taken_at, i.added_seq AS addedSeq,
+            (CASE WHEN i.favorite_at IS NOT NULL THEN 1 ELSE 0 END) AS favorite,
+            i.rating,
+            (CASE WHEN i.hidden_at IS NOT NULL THEN 1 ELSE 0 END) AS hidden,
+            i.effective_camera AS camera, i.effective_lens AS lens,
+            i.camera AS originalCamera, i.lens AS originalLens,
+            i.camera_override AS cameraOverride,
+            i.iso, i.f_number, i.exposure, i.focal,
+            i.effective_gps_lat AS gps_lat, i.effective_gps_lon AS gps_lon,
+            i.effective_location_name AS location_name,
+            i.taken_at_override AS takenAtOverride,
+            i.gps_lat_override AS gpsLatOverride,
+            i.gps_lon_override AS gpsLonOverride,
+            i.gps_cleared AS gpsCleared,
+            i.gps_file_modified AS gpsFileModified,
+            i.location_name_override AS locationNameOverride,
+            i.duration, i.fps, i.codec, i.path
+     FROM item_effective i
+     WHERE i.root_id = ? AND i.meta_state = 'done'
+       AND i.id > ? AND i.deleted_at IS NULL AND i.ignored_at = 0
+       AND i.live_photo_id IS NULL AND i.hidden_at IS NULL
+     ORDER BY i.id
+     LIMIT ?`,
+    )
+    .all(id, cursor, pageSize);
+  const nextAfter = rows.length ? Number(rows[rows.length - 1].id) : cursor;
+  const items = rows.filter(
+    (item) =>
+      item.gps_lat != null &&
+      item.gps_lon != null &&
+      Number.isFinite(Number(item.gps_lat)) &&
+      Number.isFinite(Number(item.gps_lon)),
+  );
+  return {
+    items,
+    nextAfter,
+    complete: getScanState(id).metadataReady === true,
+  };
 }
 
 /** 收藏：所有被标记过的项目，最近收藏的排前面。 */
@@ -6003,7 +6228,11 @@ function closeDatabase() {
 module.exports = {
   openDb,
   scanRoot,
+  readMetadata,
+  finishMetadataEnrichment,
+  markMetadataReady,
   getScanState,
+  countPendingMetadata,
   requestScanCancel,
   clearScanCancellation,
   listRoots,
@@ -6023,6 +6252,7 @@ module.exports = {
   setAlbumCover,
   getItems,
   getLibraryItems,
+  getLocationItemsAfter,
   getFavoriteItems,
   listWallAlbums,
   listPhotoWallAlbums,

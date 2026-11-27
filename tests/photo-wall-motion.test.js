@@ -214,7 +214,7 @@ test("照片墙在尚未显示墙面的入场阶段退出时立即撤销空白�
     /if \(immediate \|\| reduced\) \{\s*app\.classList\.remove\(\s*"photo-wall-backdrop",\s*"photo-wall-backdrop-animating",\s*"photo-wall-backdrop-restoring",\s*\);/,
   );
   const leave = appSource.slice(
-    appSource.indexOf("async function leavePhotoWallMode("),
+    appSource.indexOf("function leavePhotoWallMode("),
     appSource.indexOf("function setPhotoWall("),
   );
   assert.match(

@@ -29,6 +29,16 @@ const EN_DATE_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   hour12: false,
 });
+const ZH_COUNT_FORMAT = new Intl.NumberFormat("zh-CN");
+const EN_COUNT_FORMAT = new Intl.NumberFormat("en-US");
+
+function formatCount(value) {
+  const count = Number(value);
+  if (!Number.isFinite(count)) return "0";
+  return (uiLanguageIsEnglish() ? EN_COUNT_FORMAT : ZH_COUNT_FORMAT).format(
+    Math.max(0, Math.trunc(count)),
+  );
+}
 
 const cssMotionToken = (name, fallback) =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
@@ -41,7 +51,7 @@ const collator = new Intl.Collator("zh-Hans-CN", {
   numeric: true,
   sensitivity: "base",
 });
-const DEFAULT_ITEM_SORT = "custom";
+const DEFAULT_ITEM_SORT = "newest";
 const ITEM_SORT_KEY = "photo-item-sort";
 const ITEM_SORT_IDS = Object.freeze([
   "newest",
@@ -1795,10 +1805,18 @@ let galleryZoomBusy = false;
 let galleryZoomSeq = 0;
 let galleryZoomFocusPoint = null;
 let galleryZoomTarget = 4;
-let galleryWheelAccum = 0;
-let galleryWheelTimer = 0;
-let galleryWheelLocked = false;
-let galleryWheelUnlockTimer = 0;
+let galleryWheelPreviewLog = 0;
+let galleryWheelPreviewBaseLevel = 4;
+let galleryWheelPreviewFocus = null;
+let galleryWheelPreviewActive = false;
+let galleryWheelPreviewHosts = [];
+let galleryWheelSettleTimer = 0;
+let galleryWheelCommitTimer = 0;
+let galleryWheelMouseLocked = false;
+let galleryWheelMouseUnlockTimer = 0;
+let galleryWheelMouseDirection = 0;
+let galleryWheelMouseLastAt = 0;
+let galleryZoomCrossfadeMotion = null;
 let galleryFullObserver = null;
 
 /* 相簿网格的鼠标滚轮和 Folia 一样做指数趋近：
@@ -1843,8 +1861,15 @@ let photoWallFrame = null;
 let photoWallReady = false;
 let photoWallTransition = "idle";
 let photoWallExitResolver = null;
+let photoWallExitPromise = null;
+let photoWallLaunchSeq = 0;
 let photoWallSidebarRailMarker = null;
 let photoWallDomFrozen = false;
+let pendingRenderAfterPhotoWall = false;
+let ordinarySurfaceRecoveryTimer = 0;
+let ordinarySurfaceRecoveryAttempts = 0;
+let ordinarySurfaceRecoveryForce = false;
+let ordinarySurfaceRecoveryRendering = false;
 let photoWallAppWasInert = false;
 let photoWallAppAriaHidden = null;
 let photoWallEnterTimer = 0;
@@ -1854,12 +1879,13 @@ let photoWallLoadingRequest = 0;
 let photoWallLoadWatchdogTimer = 0;
 let photoWallInitRetryAttempted = false;
 
-const PHOTO_WALL_ENTER_TIMEOUT_MS = 12000;
+const PHOTO_WALL_ENTER_TIMEOUT_MS = 20000;
 const PHOTO_WALL_LOADING_FADE_MS = 180;
-const PHOTO_WALL_LIBRARY_LOADING_DELAY_MS = 240;
+const PHOTO_WALL_LOADING_DELAY_MS = 320;
+const PHOTO_WALL_LIBRARY_LOADING_DELAY_MS = 520;
 const PHOTO_WALL_LOAD_WATCHDOG_MS = 5000;
 const PHOTO_WALL_PENDING_ENTRY_KEY = "photo-wall-pending-entry";
-const PHOTO_WALL_PENDING_ENTRY_MAX_AGE_MS = 15000;
+const PHOTO_WALL_PENDING_ENTRY_MAX_AGE_MS = 60000;
 
 function rememberPhotoWallPendingEntry(mode) {
   try {
@@ -2000,11 +2026,14 @@ function armPhotoWallEnterTimeout() {
     photoWallPlaybackOpenSeq += 1;
     unmountPhotoWallApp();
     releasePhotoWallBackdrop();
+    const needsDeferredRender = pendingRenderAfterPhotoWall;
+    pendingRenderAfterPhotoWall = false;
     state.photoWall = false;
     state.photoWallPlayback = null;
     photoWallTransition = "idle";
     hidePhotoWallLoading({ immediate: true });
-    flushPendingUpdate();
+    void flushPendingUpdate();
+    scheduleOrdinarySurfaceRecovery({ force: needsDeferredRender });
     toast("照片墙载入超时，请重试");
   }, PHOTO_WALL_ENTER_TIMEOUT_MS);
 }
@@ -2135,6 +2164,8 @@ const rememberActiveView = () =>
 /* 崩溃恢复快照：记录崩溃前所在视图，渲染进程重载后据此回到原视图，
    而不是掉回默认图库。每次 render 刷新，开销极小。 */
 const LAST_VIEW_KEY = "fotora-last-view";
+let pendingRecoverySnapshot = null;
+let recoveryPlaybackSuppressed = false;
 function snapshotCurrentView() {
   const targetLat = Number(locationAssignTarget?.lat);
   const targetLon = Number(locationAssignTarget?.lon);
@@ -2145,6 +2176,17 @@ function snapshotCurrentView() {
     targetLat <= 90 &&
     targetLon >= -180 &&
     targetLon <= 180;
+  const slideshowState = window.albumSlideshow?.getState?.();
+  const photoWallPlayback = state.photoWall
+    ? {
+        wallKind: state.photoWallPlayback?.wallKind || "tile",
+        mode: state.photoWallPlayback?.mode || "photos",
+        albumIds: (state.photoWallPlayback?.albums || [])
+          .map((album) => Number(album?.id))
+          .filter((id) => Number.isInteger(id) && id > 0),
+        currentAlbumId: Number(state.photoWallPlayback?.currentAlbumId) || null,
+      }
+    : null;
   const value = JSON.stringify({
     activeId: state.activeId,
     locationSubview: state.locationSubview,
@@ -2167,6 +2209,19 @@ function snapshotCurrentView() {
       state.albumMapOpen && state.albumMapAssignMode
         ? [...locationAssignSavedIds]
         : [],
+    photoWallPlayback,
+    slideshow:
+      slideshowState?.active === true
+        ? {
+            active: true,
+            paused:
+              slideshowState.paused === true || slideshowState.ended === true,
+            ended: slideshowState.ended === true,
+            sceneIndex: Number(slideshowState.sceneIndex) || 0,
+            currentPhotoId: Number(slideshowState.currentPhotoId) || null,
+            title: String(slideshowState.title || "").slice(0, 120),
+          }
+        : null,
   });
   /* sessionStorage 足够快，但渲染进程硬崩溃时可能来不及落盘，甚至会一起
      丢失。再写一份 localStorage，确保崩溃后的自动重载仍能回到原视图。 */
@@ -2176,6 +2231,17 @@ function snapshotCurrentView() {
     } catch {}
   }
 }
+
+window.addEventListener("fotora:slideshow-state-change", (event) => {
+  const active = event.detail?.active === true;
+  setContextMapPrewarmSuspended(active || state.photoWall);
+  if (active) thumbClearDecodePool();
+  else if (!state.photoWall) {
+    resumeContextMapPrewarmIfPossible();
+    scheduleOrdinarySurfaceRecovery({ delay: 240 });
+  }
+  snapshotCurrentView();
+});
 
 function readLastViewSnapshot() {
   for (const storage of [sessionStorage, localStorage]) {
@@ -2449,6 +2515,24 @@ const activeRootEntry = () =>
   state.roots[0] ||
   null;
 
+function activeLibraryIsBrowsable() {
+  return Boolean(
+    state.activeRootId != null &&
+    state.roots.some((root) => Number(root.id) === Number(state.activeRootId)),
+  );
+}
+
+function ensureActiveLibraryFeature() {
+  if (activeLibraryIsBrowsable()) return true;
+  closeMenu();
+  toast(
+    state.rootImport || pendingImportedRootActivation
+      ? "图库正在导入，完成后再使用这个功能"
+      : "请先导入一个图库",
+  );
+  return false;
+}
+
 /* 图库与相簿的 DOM / 数据缓存必须带当前根目录身份。
    两个图库的 revision 或照片 ID 恰好相同时，也不能互相命中缓存。 */
 function activeRootCacheKey() {
@@ -2558,28 +2642,40 @@ function defaultPhotoStyle() {
 function activePhotoStyle() {
   return state.photoStyleOverrides.get(ratioViewKey()) || defaultPhotoStyle();
 }
-const isOriginalRatio = () => activePhotoStyle() === "original";
 const GALLERY_ZOOM_MIN = 1;
 const GALLERY_STANDARD_ZOOM = 4;
+const GALLERY_GRID_THUMB_SIZE = 192;
+const GALLERY_GRID_DETAIL_SIZE = 400;
+const GALLERY_BLANK_IMAGE =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const GALLERY_LOW_RES_THUMB_SIZE = 48;
+const GALLERY_ATLAS_PAGE_SIZE = 64;
+const GALLERY_ATLAS_COLUMNS = 8;
+const GALLERY_ATLAS_CELL_SIZE = 64;
+const GALLERY_ATLAS_FORMAT_VERSION = 2;
+const GALLERY_ATLAS_TIMEOUT_MS = 1800;
+const GALLERY_ATLAS_WARM_DELAY_MS = 60;
+const GALLERY_ATLAS_WARM_IDLE_MS = 1000;
+const GALLERY_ATLAS_WARM_CONCURRENCY = 4;
+const GALLERY_LOW_RES_FALLBACK_SPAN = 120;
 const GALLERY_ZOOM_MAX = 5;
 const GALLERY_LEVEL_SCALE = Object.freeze({
-  1: 0.16,
-  2: 0.3,
-  3: 0.52,
+  1: 0.32,
+  2: 0.46,
+  3: 0.64,
   4: 1,
   5: 1.55,
 });
 const clampGalleryZoom = (level) =>
   Math.max(GALLERY_ZOOM_MIN, Math.min(GALLERY_ZOOM_MAX, level));
-/* 浏览网格不再始终请求 600px。缩略图尺寸跟着五档网格走，
-   高质量文件只在查看器和编辑界面加载。 */
-function galleryThumbSizeForZoom(level = state.photoZoom) {
-  const zoom = clampGalleryZoom(level);
-  if (zoom <= 2) return 128;
-  if (zoom === 3) return 200;
-  if (zoom === 4) return 400;
-  return 600;
+/* 与 Lap 的核心相同：普通缩放和四种布局都复用同一张轻量网格图。
+   从标准档开始再叠一层 400px 细节图，图层可以被复用，但底层 img.src
+   永远不变。这样缩放、布局切换和返回都不会把整屏照片重新加载一遍。 */
+function galleryThumbSizeForZoom() {
+  return GALLERY_GRID_THUMB_SIZE;
 }
+const isOriginalRatio = () =>
+  state.photoZoom >= GALLERY_STANDARD_ZOOM && activePhotoStyle() === "original";
 const galleryZoomClasses = () => {
   const level = clampGalleryZoom(state.photoZoom);
   return ` gallery-zoom-${level}${
@@ -2611,6 +2707,7 @@ const VIRTUAL_PHOTO_GRID_OVERSCAN_MAX_PX = 460;
    再套一个像素总上限 —— 小图档几乎不要钱，大图档自动收回来。 */
 const VIRTUAL_PHOTO_GRID_TRAIL_BUDGET_BYTES = 24 * 1024 * 1024;
 const VIRTUAL_PHOTO_GRID_TRAIL_MAX_PX = 1200;
+const VIRTUAL_PHOTO_GRID_TRAIL_MAX_ROWS = 4;
 let galleryScrollTrailDirection = 1;
 let galleryScrollTrailLastTop = 0;
 let photoGridLayoutFrame = 0;
@@ -2619,6 +2716,9 @@ let photoGridLayoutSuspended = false;
 let photoGridInstantSeq = 0;
 let virtualPhotoGridWindowFrame = 0;
 const virtualPhotoGridLayouts = new WeakMap();
+const virtualPhotoGridTileMaps = new WeakMap();
+const virtualPhotoGridLayoutCache = new WeakMap();
+const VIRTUAL_PHOTO_GRID_LAYOUT_CACHE_LIMIT = 18;
 const photoGridFlipByTile = new WeakMap();
 const photoGridFlipMotions = new Set();
 
@@ -2717,6 +2817,7 @@ function setPhotoGridLayoutInstant(instant) {
    格子周围的空间属于原始比例模式本身；空白页问题必须从图片加载/
    缩略图状态修复，不能通过替换整个布局来掩盖。 */
 function effectivePhotoLayoutMode() {
+  if (state.photoZoom < GALLERY_STANDARD_ZOOM) return "tile";
   const style = activePhotoStyle();
   return style === "original" || style === "square" ? "tile" : style;
 }
@@ -2750,16 +2851,9 @@ function photoLayoutTargetSize(grid) {
   const baseSize =
     parseFloat(style.getPropertyValue("--photo-tile-base")) || 190;
   const level = clampGalleryZoom(state.photoZoom);
-  const scale =
-    level === 1
-      ? 0.1
-      : level === 2
-        ? 0.25
-        : level === 3
-          ? 0.5
-          : level === 4
-            ? 1
-            : 1.55;
+  /* 手势预览、CSS 档位和虚拟网格必须使用同一张倍率表。三处各写一套时，
+     预览结束会从 0.16 跳到 0.10 这类不同尺寸，看起来像重排后又缩了一下。 */
+  const scale = GALLERY_LEVEL_SCALE[level];
   return Math.max(1, baseSize * scale);
 }
 
@@ -2969,29 +3063,97 @@ function galleryTrailOverscanPx(grid, layout, rowPitch) {
     1,
     Math.floor((grid.clientWidth + gap) / (box.width + gap)),
   );
-  const rows = Math.floor(
-    VIRTUAL_PHOTO_GRID_TRAIL_BUDGET_BYTES /
-      (thumbSize * thumbSize * 4 * perRow),
+  const rows = Math.min(
+    state.photoZoom <= GALLERY_ZOOM_MIN ? 2 : VIRTUAL_PHOTO_GRID_TRAIL_MAX_ROWS,
+    Math.floor(
+      VIRTUAL_PHOTO_GRID_TRAIL_BUDGET_BYTES /
+        (thumbSize * thumbSize * 4 * perRow),
+    ),
   );
   if (rows <= 0) return 0;
   return Math.min(VIRTUAL_PHOTO_GRID_TRAIL_MAX_PX, rows * rowPitch);
 }
 
+/* 布局完成后预先记录每项起点和累计最大终点。滚动时只做两次二分查找，
+   不再每一帧 filter 整个图库的盒子数组。 */
+function virtualPhotoGridGeometryMetrics(boxes) {
+  const starts = new Array(boxes.length);
+  const prefixMaxEnds = new Array(boxes.length);
+  let maxEnd = 0;
+  let monotonic = true;
+  for (let index = 0; index < boxes.length; index += 1) {
+    const box = boxes[index];
+    const start = Number(box?.y) || 0;
+    const end = start + (Number(box?.height) || 0);
+    if (index > 0 && start < starts[index - 1]) monotonic = false;
+    starts[index] = start;
+    maxEnd = Math.max(maxEnd, end);
+    prefixMaxEnds[index] = maxEnd;
+  }
+  return { starts, prefixMaxEnds, monotonic };
+}
+
+function virtualPhotoGridVisibleBoxes(
+  layout,
+  rangeTop,
+  rangeBottom,
+  contentTop,
+) {
+  const boxes = layout?.boxes || [];
+  if (!boxes.length) return [];
+  const localTop = rangeTop - contentTop;
+  const localBottom = rangeBottom - contentTop;
+  const { starts, prefixMaxEnds, monotonic } = layout.geometryMetrics || {};
+  if (!monotonic || !starts || !prefixMaxEnds) {
+    return boxes.filter(
+      (box) => box.y + box.height >= localTop && box.y <= localBottom,
+    );
+  }
+
+  let low = 0;
+  let high = prefixMaxEnds.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (prefixMaxEnds[middle] >= localTop) high = middle;
+    else low = middle + 1;
+  }
+  const start = low;
+
+  low = start;
+  high = starts.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (starts[middle] <= localBottom) low = middle + 1;
+    else high = middle;
+  }
+  return boxes.slice(start, low);
+}
+
 function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
   const content = $("#content");
   if (!grid?.isConnected || !content || !layout?.boxes.length) return;
-  const contentRect = content.getBoundingClientRect();
-  const gridRect = grid.getBoundingClientRect();
-  const contentTop = content.scrollTop + gridRect.top - contentRect.top;
+  const contentTop = Number.isFinite(layout.gridTop)
+    ? layout.gridTop
+    : (() => {
+        const contentRect = content.getBoundingClientRect();
+        const gridRect = grid.getBoundingClientRect();
+        return content.scrollTop + gridRect.top - contentRect.top;
+      })();
   const rowPitch = virtualPhotoGridRowPitch(grid, layout);
   /* 小缩略图档位一屏可能有上千格。原来的 1.5 屏上下缓冲会把这些格子
      和它们的解码任务同时留在窗口里；按“几行”而不是“几屏”估算，
      既能覆盖正常滚动，又不会在滚动时反复创建成片的离屏内容。 */
+  const overscanRows =
+    state.photoZoom <= GALLERY_ZOOM_MIN
+      ? 1
+      : state.photoZoom < GALLERY_STANDARD_ZOOM
+        ? 2
+        : 3;
   const overscan = Math.min(
     VIRTUAL_PHOTO_GRID_OVERSCAN_MAX_PX,
     Math.max(
       VIRTUAL_PHOTO_GRID_OVERSCAN_MIN_PX,
-      Math.min(content.clientHeight * 0.5, rowPitch * 3),
+      Math.min(content.clientHeight * 0.5, rowPitch * overscanRows),
     ),
   );
   /* 往回翻是最容易撞上「明明看过了却还要再加载一次」的场景，所以滚动方向的
@@ -3007,10 +3169,11 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
     content.clientHeight +
     (scrollingDown ? overscan : trail) +
     rowPitch * extraRowsBelow;
-  const visibleBoxes = layout.boxes.filter(
-    (box) =>
-      box.y + box.height + contentTop >= rangeTop &&
-      box.y + contentTop <= rangeBottom,
+  const visibleBoxes = virtualPhotoGridVisibleBoxes(
+    layout,
+    rangeTop,
+    rangeBottom,
+    contentTop,
   );
   const visible = new Set(visibleBoxes.map((box) => box.index));
   const focusedTile = document.activeElement?.closest?.(
@@ -3020,22 +3183,63 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
     focusedTile && grid.contains(focusedTile)
       ? Number(focusedTile.dataset.index)
       : -1;
-
-  const tiles = new Map();
-  for (const tile of grid.querySelectorAll(":scope > .tile[data-index]")) {
-    const index = Number(tile.dataset.index);
-    if (!Number.isInteger(index)) continue;
-    if (visible.has(index) || index === focusedIndex) {
+  const positionPending = grid.dataset.virtualLayoutPending === "true";
+  let tiles = virtualPhotoGridTileMaps.get(grid);
+  const tileMapStale = !tiles || tiles.size !== grid.childElementCount;
+  if (tileMapStale) {
+    tiles = new Map();
+    for (const tile of grid.querySelectorAll(":scope > .tile[data-index]")) {
+      const index = Number(tile.dataset.index);
+      if (!Number.isInteger(index)) continue;
+      /* 导入中的渐进填充和换档窗口可能在同一索引短暂留下两个节点。
+         以前 Map 只保留一个，剩下的旧节点会一直卡在原比例位置，
+         看起来就是上半屏还是非方形、下半屏已经是方形。 */
+      if (tiles.has(index)) {
+        galleryImageWindowObserver?.unobserve(tile);
+        galleryImageWindowObserved.delete(tile);
+        galleryFullObserver?.unobserve(tile);
+        tile.remove();
+        continue;
+      }
       tiles.set(index, tile);
+    }
+    virtualPhotoGridTileMaps.set(grid, tiles);
+  }
+  const windowKey = [
+    visibleBoxes[0]?.index ?? -1,
+    visibleBoxes[visibleBoxes.length - 1]?.index ?? -1,
+    visibleBoxes.length,
+    focusedIndex,
+  ].join(":");
+  /* 在同一行里滚动时可见索引根本没变。不要再遍历三百多个格子
+     重复读、写 left/top/width/height，只为确认它们仍在原处。 */
+  if (
+    !positionPending &&
+    !tileMapStale &&
+    grid.dataset.virtualWindowKey === windowKey
+  ) {
+    return;
+  }
+
+  for (const [index, tile] of tiles) {
+    if (!tile.isConnected || tile.parentElement !== grid) {
+      tiles.delete(index);
+      continue;
+    }
+    if (visible.has(index) || index === focusedIndex) {
       continue;
     }
     galleryImageWindowObserver?.unobserve(tile);
     galleryImageWindowObserved.delete(tile);
+    galleryFullObserver?.unobserve(tile);
     /* 摘走已经解码好的那张图，留着给之后同一位置的格子直接接回去。 */
     donateThumbDecodeImage(tile);
+    donateThumbLowResImage(tile);
     tile.remove();
+    tiles.delete(index);
   }
   const missing = visibleBoxes.filter((box) => !tiles.has(box.index));
+  const missingIndexes = new Set(missing.map((box) => box.index));
   if (missing.length) {
     const template = document.createElement("template");
     template.innerHTML = missing
@@ -3052,6 +3256,7 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
   for (const box of visibleBoxes) {
     const tile = tiles.get(box.index);
     if (!tile) continue;
+    if (!positionPending && !missingIndexes.has(box.index)) continue;
     const left = `${box.x.toFixed(3)}px`;
     const top = `${box.y.toFixed(3)}px`;
     const width = `${box.width.toFixed(3)}px`;
@@ -3069,10 +3274,14 @@ function syncVirtualPhotoGrid(grid, layout, { extraRowsBelow = 0 } = {}) {
        这一步必须等格子进了真文档再做 —— <template> 的内容文档不是「完全
        活动」的，把一张已经加载好的 <img> 挪进去，浏览器会把这次加载作废。 */
     const img = adoptThumbDecodeImage(tile);
+    adoptThumbLowResImage(tile);
     /* 领来的节点不会再触发 onload，得自己补一次就绪同步。 */
     if (img?.complete && img.naturalWidth > 0) syncTileAspect(img);
     if (galleryImageWindowObserver) observeGalleryImageTile(tile);
+    observeGalleryDetailTile(tile);
   }
+  grid.dataset.virtualWindowKey = windowKey;
+  delete grid.dataset.virtualLayoutPending;
 }
 
 function syncVirtualPhotoGridWindowNow({ extraRowsBelow = 0 } = {}) {
@@ -3126,7 +3335,14 @@ function ensureVirtualPhotoTile(index) {
   tile.style.width = `${box.width.toFixed(3)}px`;
   tile.style.height = `${box.height.toFixed(3)}px`;
   found.grid.append(tile);
+  virtualPhotoGridTileMaps.get(found.grid)?.set(Number(index), tile);
+  /* 查看器跳到远处再关闭时，这一格不是由虚拟窗口批量补出来的，
+     同样要先领回大图旁边已经预解码好的网格节点。 */
+  const img = adoptThumbDecodeImage(tile);
+  adoptThumbLowResImage(tile);
+  if (img?.complete && img.naturalWidth > 0) syncTileAspect(img);
   observeGalleryImageTiles([found.grid]);
+  observeGalleryDetailTile(tile);
   return tile;
 }
 
@@ -3216,6 +3432,52 @@ function animatePhotoGridLayout(grid, before) {
   }
 }
 
+function virtualPhotoGridLayoutCacheKey(
+  grid,
+  { width, effectiveMode, targetSize, layoutGap, seamBleed },
+) {
+  const items = state.items;
+  const middle = items[Math.floor(items.length / 2)];
+  const rawIndices = grid.dataset.windowIndices || "";
+  return [
+    state.activeRootId ?? "",
+    state.activeId,
+    state.revision || 0,
+    items.length,
+    items[0]?.id ?? "",
+    middle?.id ?? "",
+    items[items.length - 1]?.id ?? "",
+    rawIndices.length,
+    rawIndices.slice(0, 16),
+    rawIndices.slice(-16),
+    width.toFixed(2),
+    effectiveMode,
+    targetSize.toFixed(2),
+    layoutGap.toFixed(2),
+    seamBleed.toFixed(2),
+  ].join(":");
+}
+
+function cachedVirtualPhotoGridLayout(grid, key, create) {
+  let cache = virtualPhotoGridLayoutCache.get(grid);
+  if (!cache) {
+    cache = new Map();
+    virtualPhotoGridLayoutCache.set(grid, cache);
+  }
+  const cached = cache.get(key);
+  if (cached) {
+    cache.delete(key);
+    cache.set(key, cached);
+    return cached;
+  }
+  const created = create();
+  cache.set(key, created);
+  while (cache.size > VIRTUAL_PHOTO_GRID_LAYOUT_CACHE_LIMIT) {
+    cache.delete(cache.keys().next().value);
+  }
+  return created;
+}
+
 function applyPhotoGridLayouts({
   animate = false,
   before = null,
@@ -3246,6 +3508,52 @@ function applyPhotoGridLayouts({
 
     const width = grid.clientWidth;
     if (width <= 0) continue;
+    const targetSize = photoLayoutTargetSize(grid);
+    const layoutGap = photoLayoutGap(grid);
+    const seamBleed = photoLayoutSeamBleed(grid);
+    if (windowed) {
+      const cacheKey = virtualPhotoGridLayoutCacheKey(grid, {
+        width,
+        effectiveMode,
+        targetSize,
+        layoutGap,
+        seamBleed,
+      });
+      const cached = cachedVirtualPhotoGridLayout(grid, cacheKey, () => {
+        const entries = virtualPhotoGridEntries(grid);
+        if (!entries.length) return null;
+        const result =
+          effectiveMode === "tile"
+            ? tilePhotoBoxes(entries, width, targetSize, layoutGap)
+            : effectiveMode === "justified"
+              ? justifiedPhotoBoxes(entries, width, targetSize, layoutGap)
+              : masonryPhotoBoxes(entries, width, targetSize, layoutGap);
+        growPhotoBoxesForSeam(result.boxes, seamBleed);
+        return {
+          layout: {
+            boxes: result.boxes,
+            boxByIndex: new Map(result.boxes.map((box) => [box.index, box])),
+            geometryMetrics: virtualPhotoGridGeometryMetrics(result.boxes),
+            gridTop: 0,
+          },
+          height: result.height,
+        };
+      });
+      if (!cached) continue;
+      virtualPhotoGridLayouts.set(grid, cached.layout);
+      grid.dataset.virtualLayoutPending = "true";
+      grid.style.height = `${Math.ceil(cached.height)}px`;
+      grid.classList.add("photo-layout-measured");
+      /* 交叉淡化会临时 scale 网格。在动画开始前记录内容坐标中的稳定
+         顶部，后续滚动窗口不会把 transform 后的位置当成真实布局。 */
+      cached.layout.gridTop =
+        (content?.scrollTop || 0) +
+        grid.getBoundingClientRect().top -
+        (content?.getBoundingClientRect().top || 0);
+      virtualGrids.push(grid);
+      if (snapshots) animatedGrids.push([grid, snapshots.get(grid)]);
+      continue;
+    }
     const entries = windowed
       ? virtualPhotoGridEntries(grid)
       : tiles.map((tile) => {
@@ -3260,27 +3568,13 @@ function applyPhotoGridLayouts({
     const entriesByIndex = new Map(
       entries.map((entry) => [entry.index, entry]),
     );
-    const targetSize = photoLayoutTargetSize(grid);
-    const layoutGap = photoLayoutGap(grid);
     const result =
       effectiveMode === "tile"
         ? tilePhotoBoxes(entries, width, targetSize, layoutGap)
         : effectiveMode === "justified"
           ? justifiedPhotoBoxes(entries, width, targetSize, layoutGap)
           : masonryPhotoBoxes(entries, width, targetSize, layoutGap);
-    growPhotoBoxesForSeam(result.boxes, photoLayoutSeamBleed(grid));
-    if (windowed) {
-      const layout = {
-        boxes: result.boxes,
-        boxByIndex: new Map(result.boxes.map((box) => [box.index, box])),
-      };
-      virtualPhotoGridLayouts.set(grid, layout);
-      grid.style.height = `${Math.ceil(result.height)}px`;
-      grid.classList.add("photo-layout-measured");
-      virtualGrids.push(grid);
-      if (snapshots) animatedGrids.push([grid, snapshots.get(grid)]);
-      continue;
-    }
+    growPhotoBoxesForSeam(result.boxes, seamBleed);
     if (snapshots) animatedGrids.push([grid, snapshots.get(grid)]);
     if (effectiveMode === "tile") continue;
     for (const box of result.boxes) {
@@ -3848,8 +4142,8 @@ const ALBUM_MENU_GROUPS = Object.freeze([
       Object.freeze({ id: "locationFilter", label: "位置筛选", icon: "map" }),
       Object.freeze({ id: "filter", label: "媒体筛选", icon: "filter" }),
       Object.freeze({ id: "device", label: "设备筛选", icon: "device" }),
-      Object.freeze({ id: "type", label: "类型筛选", icon: "format" }),
-      Object.freeze({ id: "extension", label: "类型过滤", icon: "funnel" }),
+      Object.freeze({ id: "type", label: "媒体类型", icon: "format" }),
+      Object.freeze({ id: "extension", label: "文件格式", icon: "funnel" }),
     ]),
   }),
   Object.freeze({
@@ -4085,10 +4379,13 @@ const locationFilterMatches = (item) => {
   if (state.locationFilter === "all") return true;
   const hasLocation = Boolean(locationCoordinate(item));
   const modified = hasRestorableLocation(item);
+  const metadataPending = item?.metaState === "pending";
   if (state.locationFilter === "located") return hasLocation;
-  if (state.locationFilter === "unlocated") return !hasLocation;
+  if (state.locationFilter === "unlocated")
+    return !metadataPending && !hasLocation;
   if (state.locationFilter === "modified") return modified;
-  if (state.locationFilter === "unmodified") return !modified;
+  if (state.locationFilter === "unmodified")
+    return !metadataPending && !modified;
   return true;
 };
 const extensionFilterBaseItems = () =>
@@ -4221,7 +4518,7 @@ function libraryPickerInnerHTML() {
             role="treeitem" aria-level="2" aria-selected="${current}"
             ${current ? 'aria-current="page"' : ""} tabindex="-1"
             aria-label="${esc(path)}${unavailable ? "，目录不可用" : ""}"
-            aria-disabled="${unavailable}" title="${esc(path)}">
+            aria-disabled="${unavailable}">
             <span class="nav-library-path" dir="ltr">${esc(pathLabel)}</span>
           </button>`;
         })
@@ -4230,8 +4527,7 @@ function libraryPickerInnerHTML() {
   return `<div class="nav-library-choice-list" role="group" aria-label="图库列表">${rows}</div>
     <button class="nav-library-import" type="button" role="treeitem"
       aria-level="2" data-parent-id="library" tabindex="-1"
-      data-sidebar-library-import aria-label="导入图库（Alt+D）"
-      data-tooltip="Alt+D">
+      data-sidebar-library-import aria-label="导入图库（Alt+D）">
       <span class="nav-library-import-glyph">${ICON_LIBRARY_IMPORT}</span>
       <span class="nav-library-import-label">导入图库</span>
     </button>`;
@@ -4690,7 +4986,6 @@ function syncSidebarTitle(value = libraryTitle) {
   if (!title) return;
   const displayTitle = normalizeLibraryTitle(value);
   title.textContent = displayTitle;
-  title.title = displayTitle;
 }
 
 function applyLibraryTitle(value) {
@@ -4720,7 +5015,6 @@ function syncUnfiledInterfaceLabels(value = interfaceDisplayName("unfiled")) {
     const label = thumb.closest(".nav-item")?.querySelector(".nav-label");
     if (!label) continue;
     label.textContent = displayName;
-    label.title = displayName;
   }
   for (const card of document.querySelectorAll(".album-card[data-album]")) {
     const album = albumById(card.dataset.album);
@@ -4728,7 +5022,6 @@ function syncUnfiledInterfaceLabels(value = interfaceDisplayName("unfiled")) {
     const label = card.querySelector(".card-title");
     if (!label) continue;
     label.textContent = displayName;
-    label.title = displayName;
   }
   if (isUnfiledAlbum(albumById(state.activeId))) {
     setViewTitle(displayName);
@@ -4744,7 +5037,6 @@ function syncInterfaceNavigationLabels() {
     if (!label) continue;
     const displayName = interfaceDisplayName(key);
     label.textContent = displayName;
-    label.title = displayName;
   }
   const allToggle = document.querySelector("#sidebarList [data-all-toggle]");
   if (allToggle) {
@@ -4956,7 +5248,7 @@ function coverHTML(album, single = false) {
 function albumCardHTML(album) {
   /* 卡片下面只写照片张数；纯粹装文件夹的相簿不写这行 */
   const meta = album.count
-    ? `<div class="card-count">${album.count}</div>`
+    ? `<div class="card-count">${formatCount(album.count)}</div>`
     : "";
   const singleCover = album.parentId !== null || !!album.coverCustom;
   const quad = !singleCover && album.coverIds.length >= 4 ? " has-quad" : "";
@@ -5123,6 +5415,16 @@ function syncTileAspect(img) {
   decoded.then(revealAfterPaint);
 }
 
+function handleGalleryLowResLoad(img) {
+  const tile = img?.closest?.(".tile");
+  if (!tile) return;
+  tile.classList.add("has-thumb-l0");
+}
+
+function handleGalleryLowResError(img) {
+  img?.closest?.(".tile")?.classList.remove("has-thumb-l0");
+}
+
 const GALLERY_THUMB_RETRY_LIMIT = 2;
 
 function handleGalleryThumbError(img, failureClass = "failed") {
@@ -5235,17 +5537,43 @@ function itemTile(item, index) {
      照片墙中的大块继续使用更高的独立档位。 */
   const thumbSize = galleryThumbSizeForZoom();
   const thumb = itemThumbUrl(item, thumbSize, "inside");
+  const deferThumbDuringScroll =
+    state.photoZoom < GALLERY_STANDARD_ZOOM &&
+    document.documentElement.classList.contains("gallery-is-scrolling");
+  const thumbSrc = deferThumbDuringScroll ? "" : `src="${thumb}"`;
+  const lowResThumb = itemThumbUrl(item, GALLERY_LOW_RES_THUMB_SIZE, "inside");
+  const atlasPage = Math.floor(index / 64);
+  const atlasSlot = index % 64;
+  const atlasX = ((atlasSlot % 8) / 7) * 100;
+  const atlasY = (Math.floor(atlasSlot / 8) / 7) * 100;
+  const atlasLayer = `<span class="gallery-thumb-atlas"
+    data-gallery-atlas-page="${atlasPage}" data-gallery-atlas-slot="${atlasSlot}"
+    aria-hidden="true" style="--atlas-x:${atlasX.toFixed(3)}%;--atlas-y:${atlasY.toFixed(3)}%"></span>`;
   const body =
     item.kind === "video"
-      ? `<img loading="lazy" decoding="async" data-gallery-thumb-size="${thumbSize}"
-         src="${thumb}" alt="" draggable="false"
+      ? `<img loading="lazy" decoding="async" fetchpriority="low"
+         data-gallery-thumb-size="${thumbSize}"
+         data-gallery-thumb-src="${thumb}"
+         ${thumbSrc} alt="" draggable="false"
          onload="syncTileAspect(this)"
-         onerror="handleGalleryThumbError(this, 'failed-video')">
+         onerror="handleGalleryThumbError(this, 'failed-video')">${atlasLayer}<img
+         class="gallery-thumb-l0" loading="eager" decoding="async"
+         fetchpriority="low"
+         data-gallery-low-res-src="${lowResThumb}" alt="" aria-hidden="true" draggable="false"
+         onload="handleGalleryLowResLoad(this)"
+         onerror="handleGalleryLowResError(this)">
        ${label ? `<span class="tile-badge">${label}</span>` : ""}`
-      : `<img loading="lazy" decoding="async" data-gallery-thumb-size="${thumbSize}"
-         src="${thumb}" alt="" draggable="false"
+      : `<img loading="lazy" decoding="async" fetchpriority="low"
+         data-gallery-thumb-size="${thumbSize}"
+         data-gallery-thumb-src="${thumb}"
+         ${thumbSrc} alt="" draggable="false"
          onload="syncTileAspect(this)"
-         onerror="handleGalleryThumbError(this)">`;
+         onerror="handleGalleryThumbError(this)">${atlasLayer}<img
+         class="gallery-thumb-l0" loading="eager" decoding="async"
+         fetchpriority="low"
+         data-gallery-low-res-src="${lowResThumb}" alt="" aria-hidden="true" draggable="false"
+         onload="handleGalleryLowResLoad(this)"
+         onerror="handleGalleryLowResError(this)">`;
   const selected = state.selected.has(index) ? " is-selected" : "";
   const numberingOrdinal =
     numberingSession && state.selected.has(index)
@@ -6338,6 +6666,7 @@ function stepFilmstrip(delta) {
 }
 
 function setFilmstripMode(enabled) {
+  if (enabled && !ensureActiveLibraryFeature()) return false;
   if (enabled && !state.items.length) return;
   const returnIndex = filmstripCurrentIndex();
   clearTimeout(filmstripVideoClickTimer);
@@ -6364,6 +6693,7 @@ function setFilmstripMode(enabled) {
   }
   closeMenu({ duration: 0 });
   render();
+  if (!state.filmstrip) scheduleOrdinarySurfaceRecovery();
   if (!state.filmstrip && returnIndex >= 0) {
     const tile = tileAt(returnIndex);
     centerContentTile(tile);
@@ -6411,8 +6741,8 @@ const itemTime = (item) => Number(item?.taken_at ?? item?.mtime ?? 0) || 0;
 const itemAddedSeq = (item) =>
   Number(item?.addedSeq ?? Number.MIN_SAFE_INTEGER);
 
-/* 只改显示顺序，不动磁盘上的文件。自定义顺序按添加序号倒序，
-   最近添加的项目在前；序号相同时按文件名排，保证顺序稳定。 */
+/* 只改显示顺序，不动磁盘上的文件。默认按拍摄时间从新到旧；
+   自定义顺序仍按添加序号倒序，序号相同时按文件名排，保证顺序稳定。 */
 function sortAlbumItems(items, kind = state.itemSort) {
   const list = [...items];
   if (kind === "nameAsc" || kind === "nameDesc") {
@@ -6691,18 +7021,52 @@ let libraryTimelineSyncFrame = 0;
 let libraryTimelineTicksSignature = "";
 let libraryTimelineDrag = null;
 let libraryTimelineRepeatScrollEdge = "bottom";
+let libraryTimelineEdgeTravelSeq = 0;
 
-function toggleLibraryTimelineScrollEdge() {
+async function toggleLibraryTimelineScrollEdge() {
   const content = $("#content");
   if (!content) return false;
   const goToBottom = libraryTimelineRepeatScrollEdge === "bottom";
-  content.scrollTo({
-    top: goToBottom ? content.scrollHeight : 0,
-    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "auto"
-      : "smooth",
-  });
   libraryTimelineRepeatScrollEdge = goToBottom ? "top" : "bottom";
+  const targetTop = goToBottom
+    ? Math.max(0, content.scrollHeight - content.clientHeight)
+    : 0;
+  const distance = Math.abs(targetTop - content.scrollTop);
+  if (distance <= Math.max(320, content.clientHeight * 1.5)) {
+    content.scrollTo({
+      top: targetTop,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ? "auto"
+        : "smooth",
+    });
+    return true;
+  }
+
+  /* 远距离跳转不逐帧穿过全库。先准备终点的 L0，期间保留当前画面；
+     目标可以画出来后再一次性落位，中间位置不进入任何缩略图队列。 */
+  const seq = ++libraryTimelineEdgeTravelSeq;
+  const startTop = content.scrollTop;
+  const previewLimit = firstScreenLowResPreviewLimit();
+  const targetItems = goToBottom
+    ? state.items.slice(-previewLimit)
+    : state.items.slice(0, previewLimit);
+  const atlasReady = await Promise.race([
+    preloadGalleryAtlasPagesForItems(targetItems),
+    new Promise((resolve) => window.setTimeout(() => resolve(false), 360)),
+  ]);
+  if (!atlasReady) await preloadFirstScreenLowResPreviews(targetItems);
+  if (
+    seq !== libraryTimelineEdgeTravelSeq ||
+    !content.isConnected ||
+    Math.abs(content.scrollTop - startTop) > 2
+  ) {
+    return false;
+  }
+  content.scrollTop = targetTop;
+  syncVirtualPhotoGridWindowNow();
+  syncLibraryTimelineScrubber();
+  queueThumbLowResWarm();
+  armThumbPrefetch({ force: true });
   return true;
 }
 
@@ -6894,6 +7258,7 @@ function scrubLibraryTimelineToPointer(event) {
   if (!content || !host) return;
   const ratio = libraryTimelineRatioAtEvent(event);
   const max = Math.max(0, content.scrollHeight - content.clientHeight);
+  primeThumbLowResAtRatio(ratio);
   content.scrollTop = ratio * max;
   updateLibraryTimelineBubble(ratio);
   updateLibraryTimelineThumb();
@@ -6959,6 +7324,8 @@ function handleLibraryTimelineKey(event) {
       return;
   }
   event.preventDefault();
+  const max = Math.max(0, content.scrollHeight - content.clientHeight);
+  primeThumbLowResAtRatio(max > 0 ? content.scrollTop / max : 0);
   updateLibraryTimelineThumb();
 }
 
@@ -7039,10 +7406,10 @@ function sortedLocationItems(items = state.locationItemsRaw) {
   return sortAlbumItems(dedupeLocationItems(items), "newest");
 }
 
-function locationMapPayload() {
+function locationMapPayload(items = state.locationItemsRaw) {
   const seen = new Set();
   const payload = [];
-  for (const item of state.locationItemsRaw) {
+  for (const item of items) {
     const id = Number(item?.id);
     const coordinate = locationCoordinate(item);
     if (
@@ -7062,6 +7429,7 @@ function locationMapPayload() {
       height: Number(item.height) || 0,
       takenAt: itemTime(item),
       name: item.name || "",
+      thumbMicro: itemThumbUrl(item, 48, "cover"),
       thumb: itemThumbUrl(item, 128, "cover"),
       thumbLarge: itemThumbUrl(item, 200, "cover"),
     });
@@ -7700,6 +8068,7 @@ function mapFilmstripDisplayEnabled() {
 }
 
 function revealMapFilmstrip(kind) {
+  if (mapFilmstripHeldForViewer(kind)) return;
   clearMapFilmstripHideTimer(kind);
   setMapFilmstripRevealed(kind, true);
 }
@@ -7712,6 +8081,7 @@ function updateMapFilmstripProximity(
   setMapFilmstripPointer(kind, x, y);
   const { nav } = mapFilmstripElements(kind);
   if (!nav || nav.hidden) return;
+  if (mapFilmstripHeldForViewer(kind)) return;
   if (
     mapFilmstripDisplayEnabled() ||
     mapFilmstripPointerIsNear(kind) ||
@@ -7726,6 +8096,7 @@ function updateMapFilmstripProximity(
 function syncMapFilmstripVisibility(kind, { reveal = false } = {}) {
   const { nav } = mapFilmstripElements(kind);
   if (!nav) return;
+  if (mapFilmstripHeldForViewer(kind)) return;
   const wasDisabled = nav.classList.contains("map-filmstrip-disabled");
   clearMapFilmstripHideTimer(kind);
   nav.classList.remove("is-near");
@@ -8366,6 +8737,10 @@ let locationsMapProbeStarted = 0;
 let locationsMapBusyMessage = "";
 let locationsMapAutoRetries = 0;
 let locationsMapDeferredInitialFit = false;
+let locationsMetadataStreamTimer = 0;
+let locationsMetadataStreamAfter = 0;
+let locationsMetadataStreamGeneration = 0;
+let locationsMetadataStreamRunning = false;
 
 const LOCATIONS_MAP_SLOW_NOTICE_MS = 6000;
 const LOCATIONS_MAP_RETRY_HINT_MS = 20000;
@@ -8445,6 +8820,153 @@ function syncLocationsMapItems() {
   renderMapFilmstrip("locations");
   attemptMapFilmstripReveal("locations");
   return sent;
+}
+
+function stopLocationsMetadataStream() {
+  locationsMetadataStreamGeneration += 1;
+  locationsMetadataStreamRunning = false;
+  window.clearTimeout(locationsMetadataStreamTimer);
+  locationsMetadataStreamTimer = 0;
+}
+
+function locationsMetadataViewOpen() {
+  return (
+    (state.activeId === "locations" && state.locationSubview === "map") ||
+    isAlbumMapView()
+  );
+}
+
+function scheduleLocationsMetadataStream(delay = 450) {
+  window.clearTimeout(locationsMetadataStreamTimer);
+  locationsMetadataStreamTimer = window.setTimeout(
+    () => void pumpLocationsMetadataStream(),
+    delay,
+  );
+}
+
+function appendLocationsMetadataItems(items) {
+  const incoming = dedupeLocationItems(items).filter((item) =>
+    locationCoordinate(item),
+  );
+  if (!incoming.length) return 0;
+  const incomingById = new Map(incoming.map((item) => [item.id, item]));
+  for (const collection of [
+    state.albumItemsRaw,
+    state.albumItems,
+    state.albumMapItems,
+    state.items,
+  ]) {
+    if (!Array.isArray(collection)) continue;
+    for (let index = 0; index < collection.length; index += 1) {
+      const update = incomingById.get(Number(collection[index]?.id));
+      if (update) collection[index] = { ...collection[index], ...update };
+    }
+  }
+  const byId = new Map(state.locationItemsRaw.map((item) => [item.id, item]));
+  let changed = 0;
+  for (const item of incoming) {
+    const previous = byId.get(item.id);
+    if (
+      previous &&
+      previous.gps_lat === item.gps_lat &&
+      previous.gps_lon === item.gps_lon &&
+      Number(previous.mtime) === Number(item.mtime) &&
+      Number(previous.editRevision) === Number(item.editRevision)
+    ) {
+      continue;
+    }
+    byId.set(item.id, item);
+    changed += 1;
+  }
+  if (!changed) return 0;
+  state.locationItemsRaw = sortAlbumItems(
+    dedupeLocationItems([...byId.values()]),
+    "newest",
+  );
+  if (state.activeId === "locations" && state.locationSubview === "map") {
+    state.items = sortedLocationItems();
+  }
+  const payload = locationMapPayload(incoming);
+  if (payload.length) {
+    postToLocationsMap({
+      type: "locations-map:upsert-items",
+      items: payload,
+    });
+  }
+  renderMapFilmstrip("locations");
+  if (state.albumMapOpen) {
+    const albumIds = new Set(
+      [...state.albumItemsRaw, ...state.albumMapItems].map((item) =>
+        Number(item?.id),
+      ),
+    );
+    const albumUpdates = incoming.filter((item) => albumIds.has(item.id));
+    const albumPayload = albumMapPayload(albumUpdates);
+    if (albumPayload.length) {
+      const mapById = new Map(
+        state.albumMapItems.map((item) => [item.id, item]),
+      );
+      for (const item of albumUpdates) mapById.set(item.id, item);
+      state.albumMapItems = sortAlbumItems([...mapById.values()], "oldest");
+      postToAlbumMap({
+        type: "album-map:upsert-items",
+        items: albumPayload,
+      });
+      renderMapFilmstrip("album");
+    }
+  }
+  return changed;
+}
+
+async function pumpLocationsMetadataStream() {
+  locationsMetadataStreamTimer = 0;
+  if (locationsMetadataStreamRunning || !locationsMetadataViewOpen()) {
+    return;
+  }
+  const generation = locationsMetadataStreamGeneration;
+  locationsMetadataStreamRunning = true;
+  try {
+    const data = await api(
+      `/api/locations/stream?after=${locationsMetadataStreamAfter}&limit=250`,
+    );
+    if (
+      generation !== locationsMetadataStreamGeneration ||
+      !locationsMetadataViewOpen()
+    ) {
+      return;
+    }
+    appendLocationsMetadataItems(data.items || []);
+    const nextAfter = Math.max(
+      locationsMetadataStreamAfter,
+      Number(data.nextAfter) || 0,
+    );
+    const advanced = nextAfter > locationsMetadataStreamAfter;
+    locationsMetadataStreamAfter = nextAfter;
+    if (advanced || data.complete !== true) {
+      scheduleLocationsMetadataStream(advanced ? 300 : 650);
+      return;
+    }
+    state.scan = {
+      ...(state.scan || {}),
+      metadataRunning: false,
+      metadataReady: true,
+    };
+  } catch {
+    if (generation === locationsMetadataStreamGeneration) {
+      scheduleLocationsMetadataStream(1200);
+    }
+  } finally {
+    if (generation === locationsMetadataStreamGeneration) {
+      locationsMetadataStreamRunning = false;
+    }
+  }
+}
+
+function startLocationsMetadataStream() {
+  stopLocationsMetadataStream();
+  if (state.scan?.metadataReady === true) return;
+  locationsMetadataStreamAfter = 0;
+  scheduleLocationsMetadataStream(0);
 }
 
 function syncLocationsMapSelection(id = null) {
@@ -8824,6 +9346,7 @@ function revealLocationsMap() {
   bindMapFilmstrip("locations");
   renderMapFilmstrip("locations");
   postToLocationsMap({ type: "locations-map:activate" });
+  startLocationsMetadataStream();
   /* 就绪不立即推；等 fit 完成且照片到位（attempt 内部门控）。 */
   attemptMapFilmstripReveal("locations");
 }
@@ -8927,6 +9450,7 @@ function reloadLocationsMapFrame({ automatic = false } = {}) {
 }
 
 function invalidateLocationItems() {
+  stopLocationsMetadataStream();
   state.locationItemsRaw = [];
   state.locationItemsRevision = null;
   syncLocationsMapItems();
@@ -9123,6 +9647,7 @@ function showLocationsMapView() {
 }
 
 function hideLocationsMapView() {
+  stopLocationsMetadataStream();
   const host = $("#locationsMapHost");
   cancelMapEntryFade(locationsMapEntryFade);
   locationsMapEntryFade = null;
@@ -9214,6 +9739,7 @@ function handleLocationsMapMessage(event) {
     syncLocationsMapButtons();
     syncLocationsMapItems();
     postToLocationsMap({ type: "locations-map:activate" });
+    syncMapRailMaterial(frame.contentDocument);
     return;
   }
   if (message.type === "locations-map:first-frame") {
@@ -9250,6 +9776,7 @@ function handleLocationsMapMessage(event) {
     const y = rect.top + Number(message.pointerY);
     updateLocationsMapFilmstripProximity(x, y);
     syncLocationsMapRailFromControls(message.controlsNear === true);
+    syncMapRailMaterial(frame.contentDocument);
     return;
   }
   if (message.type === "locations-map:pointer-leave") {
@@ -9348,8 +9875,8 @@ function syncAlbumMapViewport() {
   });
 }
 
-function albumMapPayload() {
-  return state.albumMapItems
+function albumMapPayload(items = state.albumMapItems) {
+  return items
     .filter((item) => locationCoordinate(item))
     .map((item) => {
       const coordinate = locationCoordinate(item);
@@ -9362,6 +9889,7 @@ function albumMapPayload() {
         height: Number(item.height) || 0,
         takenAt: itemTime(item),
         name: item.name || "",
+        thumbMicro: itemThumbUrl(item, 48, "cover"),
         thumb: itemThumbUrl(item, 128, "cover"),
         thumbLarge: itemThumbUrl(item, 200, "cover"),
       };
@@ -9603,6 +10131,7 @@ function revealAlbumMap() {
     hidden: albumMapControlHeld,
   });
   postToAlbumMap({ type: "album-map:activate" });
+  startLocationsMetadataStream();
 }
 
 function revealAlbumMapWhenReady() {
@@ -9798,6 +10327,7 @@ function showAlbumMapView() {
 }
 
 function hideAlbumMapView() {
+  stopLocationsMetadataStream();
   const host = $("#albumMapHost");
   cancelMapEntryFade(albumMapEntryFade);
   albumMapEntryFade = null;
@@ -9824,6 +10354,7 @@ function openAlbumMap(
   items,
   { assignMode = false, recovered = null, quiet = false } = {},
 ) {
+  if (!ensureActiveLibraryFeature()) return false;
   const media = sortAlbumItems(
     dedupeLocationItems(items).filter(
       (item) => item.kind === "photo" || item.kind === "video",
@@ -9833,7 +10364,10 @@ function openAlbumMap(
   const visibleMedia = assignMode
     ? media
     : media.filter((item) => locationCoordinate(item));
-  if (!visibleMedia.length) {
+  const locationsStillPending = media.some(
+    (item) => item.metaState === "pending",
+  );
+  if (!visibleMedia.length && !locationsStillPending) {
     if (!quiet) {
       toast(
         state.activeId === "library"
@@ -9931,6 +10465,7 @@ function restoreAlbumMapFromSnapshot(snapshot) {
 }
 
 function openCurrentCollectionMap() {
+  if (!ensureActiveLibraryFeature()) return false;
   if (
     state.activeId !== "library" &&
     !(typeof state.activeId === "number" && albumById(state.activeId))
@@ -9990,6 +10525,7 @@ function closeAlbumMap({ force = false } = {}) {
   }
   /* 返回时直接恢复缓存里的照片；清掉可能残留的透明状态，但不重播入场。 */
   revealRightContent({ animateEntrance: false });
+  scheduleOrdinarySurfaceRecovery();
   requestAnimationFrame(() => {
     resumeContextMapPrewarmIfPossible();
   });
@@ -10003,6 +10539,66 @@ function closeAlbumMap({ force = false } = {}) {
 }
 
 let viewerMapContext = null;
+let mapViewerFilmstripReturn = null;
+
+function mapFilmstripKindStillActive(kind) {
+  return kind === "album"
+    ? isAlbumMapView()
+    : state.activeId === "locations" && state.locationSubview === "map";
+}
+
+function mapFilmstripHeldForViewer(kind) {
+  return mapViewerFilmstripReturn?.kind === kind && !$("#viewer").hidden;
+}
+
+function departMapFilmstripForViewer(kind) {
+  const { nav } = mapFilmstripElements(kind);
+  const wasVisible =
+    !!nav &&
+    !nav.hidden &&
+    !nav.classList.contains("map-filmstrip-disabled") &&
+    nav.getAttribute("aria-hidden") !== "true";
+  const shouldReturn = wasVisible || mapFilmstripDisplayEnabled();
+  if (!nav || !shouldReturn) {
+    mapViewerFilmstripReturn = null;
+    return;
+  }
+  const motion = { kind, nav, shouldReturn };
+  mapViewerFilmstripReturn = motion;
+  if (kind === "locations") clearLocationsMapFilmstripHideTimer();
+  else clearAlbumMapFilmstripHideTimer();
+  cancelMapFilmstripExit(nav);
+  nav.classList.remove("map-filmstrip-disabled", "is-near");
+  nav.classList.add("is-viewer-departing");
+  nav.setAttribute("aria-hidden", "true");
+  playMapFilmstripExit(nav, () => {
+    if (mapViewerFilmstripReturn !== motion) return;
+    nav.classList.remove("is-viewer-departing");
+    if ($("#viewer").hidden) return;
+    nav.classList.add("map-filmstrip-disabled");
+    syncLocationAssignApplyButton();
+  });
+}
+
+function returnMapFilmstripAfterViewer(kind) {
+  const motion = mapViewerFilmstripReturn;
+  if (!motion || motion.kind !== kind) return;
+  mapViewerFilmstripReturn = null;
+  const { nav } = motion;
+  if (!nav?.isConnected) return;
+  cancelMapFilmstripExit(nav);
+  nav.classList.remove("is-viewer-departing");
+  if (!motion.shouldReturn || !mapFilmstripKindStillActive(kind)) {
+    nav.classList.add("map-filmstrip-disabled");
+    syncLocationAssignApplyButton();
+    return;
+  }
+  nav.classList.remove("map-filmstrip-disabled");
+  nav.removeAttribute("aria-hidden");
+  playMapFilmstripEntrance(nav);
+  if (!mapFilmstripDisplayEnabled()) scheduleMapFilmstripHide(kind);
+  syncLocationAssignApplyButton();
+}
 
 function openMapPhotoViewer(kind, ids) {
   const wanted = new Set(
@@ -10018,6 +10614,7 @@ function openMapPhotoViewer(kind, ids) {
 
   viewerMapRestoreItems = state.items;
   viewerMapContext = kind;
+  departMapFilmstripForViewer(kind);
   $("#viewer").classList.add("is-map-photo-viewer");
   state.items = group;
   viewerFilmstripMode = group.length > 1 ? "group" : "hidden";
@@ -10042,6 +10639,7 @@ function finishAlbumMapViewerContext() {
   syncViewerFilmstrip();
   if (kind === "locations") syncLocationsMapSelection();
   else if (kind === "album") syncAlbumMapSelection();
+  returnMapFilmstripAfterViewer(kind);
 }
 
 function handleAlbumMapMessage(event) {
@@ -10059,6 +10657,7 @@ function handleAlbumMapMessage(event) {
     const y = rect.top + Number(message.pointerY);
     syncLocationsMapRailFromControls(message.controlsNear === true);
     updateAlbumMapFilmstripProximity(x, y);
+    syncMapRailMaterial(frame.contentDocument);
     return;
   }
   if (message.type === "album-map:pointer-leave") {
@@ -10079,6 +10678,7 @@ function handleAlbumMapMessage(event) {
       hidden: albumMapControlHeld,
     });
     postToAlbumMap({ type: "album-map:activate" });
+    syncMapRailMaterial(frame.contentDocument);
     return;
   }
   if (message.type === "album-map:first-frame") {
@@ -10343,6 +10943,7 @@ function photoWallAppPayload() {
       }));
   return {
     items,
+    wallKind,
     layout: mosaicMode
       ? "interlock"
       : filmrollMode
@@ -10394,13 +10995,16 @@ function mountPhotoWallApp() {
     state.photoWallPlayback?.mode === "masonry";
   const filmrollMode = state.photoWallPlayback?.wallKind === "filmroll";
   const mosaicMode = state.photoWallPlayback?.wallKind === "mosaic";
-  frame.title = mosaicMode
-    ? "嵌合拼图"
-    : filmrollMode
-      ? "横向胶卷"
-      : masonryMode
-        ? "纵向画廊"
-        : "错落磁贴";
+  frame.setAttribute(
+    "aria-label",
+    mosaicMode
+      ? "嵌合拼图"
+      : filmrollMode
+        ? "横向胶卷"
+        : masonryMode
+          ? "纵向画廊"
+          : "错落磁贴",
+  );
   frame.src = mosaicMode
     ? "/photo-wall/index.html?layout=interlock"
     : filmrollMode
@@ -10991,7 +11595,7 @@ function renderPhotoWallSectionAlbums(albums, kind) {
               : `data-photo-wall-album="${album.id}"`
       }
       data-album="${album.id}" role="button" tabindex="0"
-      aria-label="相簿，${esc(album.displayName)}，${album.photoCount} 张照片，${actionLabel}"
+      aria-label="相簿，${esc(album.displayName)}，${formatCount(album.photoCount)} 张照片，${actionLabel}"
       ${selectionState}>
       <div class="cover-frame">
         <div class="cover photo-wall-library-cover">
@@ -11009,7 +11613,7 @@ function renderPhotoWallSectionAlbums(albums, kind) {
       </div>
       <div class="card-meta">
         <div class="card-title">${esc(album.displayName)}</div>
-        <div class="card-count">${album.photoCount}</div>
+        <div class="card-count">${formatCount(album.photoCount)}</div>
       </div>
     </div>`;
     })
@@ -11757,7 +12361,9 @@ async function confirmMosaicWallAlbumSelection() {
 let photoWallPlaybackOpenSeq = 0;
 
 async function startPhotoWallPlayback(mode, albumIds = null) {
-  photoWallPlaybackOpenSeq += 1;
+  if (!ensureActiveLibraryFeature()) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   const albums = albumIds
     ? state.photoWallAlbums.filter((album) => albumIds.includes(album.id))
     : state.photoWallAlbums.slice();
@@ -11774,8 +12380,14 @@ async function startPhotoWallPlayback(mode, albumIds = null) {
         : "";
     try {
       const result = await api(`/api/photo-wall/photos${query}`);
+      if (
+        requestSeq !== photoWallPlaybackOpenSeq ||
+        viewSeq !== navSelectionSeq
+      )
+        return false;
       photos = Array.isArray(result.items) ? result.items : [];
     } catch (err) {
+      if (requestSeq !== photoWallPlaybackOpenSeq) return false;
       alert(err.message);
       return false;
     }
@@ -11786,7 +12398,7 @@ async function startPhotoWallPlayback(mode, albumIds = null) {
     photoWallAlbumConfirmBusy = false;
     syncPhotoWallAlbumSelectionUi();
   }
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "tile",
     mode: photoMode ? "photos" : "albums",
     albums,
@@ -11805,12 +12417,13 @@ async function startPhotoWallPlayback(mode, albumIds = null) {
   state.masonryWallSelectedAlbums.clear();
   state.filmrollWallSelectedAlbums.clear();
   state.mosaicWallSelectedAlbums.clear();
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function startMasonryWallPlayback(mode, albumIds = null) {
-  photoWallPlaybackOpenSeq += 1;
+  if (!ensureActiveLibraryFeature()) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   const albums = albumIds
     ? state.masonryWallAlbums.filter((album) => albumIds.includes(album.id))
     : state.masonryWallAlbums.slice();
@@ -11824,8 +12437,11 @@ async function startMasonryWallPlayback(mode, albumIds = null) {
   let photos = [];
   try {
     const result = await api(`/api/masonry-wall/photos${query}`);
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = Array.isArray(result.items) ? result.items : [];
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     alert(err.message);
     return false;
   }
@@ -11833,7 +12449,7 @@ async function startMasonryWallPlayback(mode, albumIds = null) {
     toast("纵向画廊里还没有可播放的照片");
     return false;
   }
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "masonry",
     mode: "photos",
     albums,
@@ -11855,12 +12471,13 @@ async function startMasonryWallPlayback(mode, albumIds = null) {
   state.mosaicWallSelectedAlbums.clear();
   photoWallAlbumConfirmBusy = false;
   syncPhotoWallAlbumSelectionUi();
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function startFilmrollWallPlayback(mode, albumIds = null) {
-  photoWallPlaybackOpenSeq += 1;
+  if (!ensureActiveLibraryFeature()) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   const albums = albumIds
     ? state.filmrollWallAlbums.filter((album) => albumIds.includes(album.id))
     : state.filmrollWallAlbums.slice();
@@ -11874,14 +12491,17 @@ async function startFilmrollWallPlayback(mode, albumIds = null) {
   let photos = [];
   try {
     const result = await api(`/api/filmroll-wall/photos${query}`);
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = Array.isArray(result.items)
       ? result.items.filter((item) => item.kind === "photo")
       : [];
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     alert(err.message);
     return false;
   }
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "filmroll",
     mode: "photos",
     albums,
@@ -11904,12 +12524,13 @@ async function startFilmrollWallPlayback(mode, albumIds = null) {
   state.mosaicWallSelectedAlbums.clear();
   photoWallAlbumConfirmBusy = false;
   syncPhotoWallAlbumSelectionUi();
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function startMosaicWallPlayback(mode, albumIds = null) {
-  photoWallPlaybackOpenSeq += 1;
+  if (!ensureActiveLibraryFeature()) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   const albums = albumIds
     ? state.mosaicWallAlbums.filter((album) => albumIds.includes(album.id))
     : state.mosaicWallAlbums.slice();
@@ -11922,10 +12543,13 @@ async function startMosaicWallPlayback(mode, albumIds = null) {
     const result = await loadMosaicWallData(
       mode === "photos-some" ? albums.map((album) => album.id) : null,
     );
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = Array.isArray(result.items)
       ? result.items.filter((item) => item.kind === "photo")
       : [];
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     alert(err.message);
     return false;
   }
@@ -11933,7 +12557,7 @@ async function startMosaicWallPlayback(mode, albumIds = null) {
     toast("嵌合拼图里还没有可播放的照片");
     return false;
   }
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "mosaic",
     mode: "photos",
     albums,
@@ -11958,24 +12582,28 @@ async function startMosaicWallPlayback(mode, albumIds = null) {
   state.mosaicWallSelectedAlbums.clear();
   photoWallAlbumConfirmBusy = false;
   syncPhotoWallAlbumSelectionUi();
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function openPhotoWallPlaybackAlbum(albumId) {
   const playback = state.photoWallPlayback;
   if (!playback || !playback.albums.some((album) => album.id === albumId))
     return;
+  if (!ensureActiveLibraryFeature()) return;
   const sequence = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   try {
     const data =
       playback.wallKind === "masonry"
         ? await api(`/api/masonry-wall/photos?albums=${Number(albumId)}`)
         : playback.wallKind === "filmroll"
           ? await api(`/api/filmroll-wall/photos?albums=${Number(albumId)}`)
-          : await api(`/api/albums/${Number(albumId)}/items?limit=100000`);
+          : playback.wallKind === "mosaic"
+            ? await loadMosaicWallData([Number(albumId)])
+            : await api(`/api/albums/${Number(albumId)}/items?limit=100000`);
     if (
       sequence !== photoWallPlaybackOpenSeq ||
+      viewSeq !== navSelectionSeq ||
       state.photoWallPlayback !== playback
     ) {
       return;
@@ -11996,6 +12624,7 @@ async function openPhotoWallPlaybackAlbum(albumId) {
   } catch (err) {
     if (
       sequence !== photoWallPlaybackOpenSeq ||
+      viewSeq !== navSelectionSeq ||
       state.photoWallPlayback !== playback
     ) {
       return;
@@ -13094,7 +13723,7 @@ function renderMenu(kind = "photos") {
             : ""
         }${
           wallDisabled
-            ? ` disabled aria-disabled="true" title="${
+            ? ` disabled aria-disabled="true" aria-description="${
                 id === "masonryWall" ||
                 id === "filmrollWall" ||
                 id === "mosaicWall"
@@ -13108,7 +13737,7 @@ function renderMenu(kind = "photos") {
         const confirm =
           submenu === "extension"
             ? `<button class="menu-extension-confirm" type="button"
-            data-extension-confirm aria-label="应用文件类型过滤"
+            data-extension-confirm aria-label="应用文件格式筛选"
             aria-hidden="true" tabindex="-1" disabled>${ICON_CHECK}</button>`
             : "";
         const rowMarkup = submenu
@@ -13481,7 +14110,7 @@ function rootSwitchOptionsHTML() {
         <span class="menu-label menu-root-path">${esc(root.path)}</span>
       </button>
       <button class="menu-root-remove" type="button" data-remove-root="${root.id}"
-        aria-label="从软件中移除 ${esc(root.path)}" title="移除根目录">${ICON_X}</button>
+        aria-label="从软件中移除 ${esc(root.path)}">${ICON_X}</button>
     </div>`;
     })
     .join("");
@@ -13611,7 +14240,7 @@ function syncCameraDeviceDraftUI() {
     controls = document.createElement("span");
     controls.className = "menu-camera-anchor-actions";
     controls.innerHTML = `<span class="menu-camera-anchor-action" role="button" tabindex="-1"
-      data-camera-commit aria-label="应用设备修改" title="应用" hidden>${ICON_CHECK}</span>`;
+      data-camera-commit aria-label="应用设备修改" hidden>${ICON_CHECK}</span>`;
     group.append(controls);
   }
   controls.style.setProperty(
@@ -16907,7 +17536,13 @@ function ordinaryContentView() {
    所以只有相簿露馅 —— 两边看着像两套逻辑，其实是同一套缓存错位。 */
 function contentViewDescriptor(parts, zoom) {
   const level = clampGalleryZoom(zoom);
-  return { key: `${JSON.stringify(parts)}@z${level}`, parts, zoom: level };
+  const baseKey = JSON.stringify(parts);
+  return {
+    key: `${baseKey}@z${level}`,
+    baseKey,
+    parts,
+    zoom: level,
+  };
 }
 
 /* 只重算键尾的档位。parts 里的 itemViewSignature 要遍历全部项目，
@@ -16961,6 +17596,12 @@ function cacheCurrentContentView() {
   }
   if (!content || !descriptor?.key) {
     content?.replaceChildren();
+    renderedContentView = null;
+    return;
+  }
+  /* 特殊视图退场时可能先清空 #content，再等待异步清理。空树绝不能作为
+     「正常图库」缓存保存，否则之后按同一个描述符恢复时只会得到空白页。 */
+  if (content && !content.childElementCount) {
     renderedContentView = null;
     return;
   }
@@ -17032,10 +17673,14 @@ function render({
   keepContextMenu = false,
   chrome = true,
   holdReveal = false,
+  force = false,
 } = {}) {
   /* 照片墙打开期间，原页面需要作为真实背景留在 DOM 中；
      外部刷新先挂起，等墙面退场后再同步。 */
-  if (photoWallDomFrozen) return;
+  if (photoWallDomFrozen) {
+    pendingRenderAfterPhotoWall = true;
+    return false;
+  }
   snapshotCurrentView();
   /* 换页时先把媒体压住，等 revealRightContent() 真正建立入场动画后
      再放开。这样即使缩略图已经缓存、首帧立即可画，也不会在载入动画
@@ -17106,6 +17751,13 @@ function render({
     "locations-map-titlebar-hidden",
     (isLocations && state.locationSubview === "map") || isAlbumMap,
   );
+  if (
+    !document.documentElement.classList.contains(
+      "locations-map-titlebar-hidden",
+    )
+  ) {
+    stopMapRailMaterialSync();
+  }
   document.documentElement.classList.toggle(
     "photo-wall-library-titlebar-hidden",
     isPhotoWall &&
@@ -17146,7 +17798,9 @@ function render({
     albumMapVisible || locationsMapVisible ? null : ordinaryContentView();
   const content = $("#content");
   let reusedContentView = Boolean(
-    nextContentView && renderedContentView?.key === nextContentView.key,
+    !force &&
+    nextContentView &&
+    renderedContentView?.key === nextContentView.key,
   );
   let nextProgressiveGridBatch = null;
   if (!reusedContentView) {
@@ -17299,6 +17953,103 @@ function render({
   /* 视图落定了（导入完成 / 切图库 / 切相簿都会走到这里）：
      从当前可见区开始，往下按顺序把缩略图补起来。 */
   armThumbPrefetch();
+  queueThumbLowResWarm();
+  ensureLibraryStandardThumbWarm();
+  if (
+    state.roots.length &&
+    !photoWallVisible &&
+    !locationsMapVisible &&
+    !albumMapVisible &&
+    !ordinarySurfaceRecoveryRendering &&
+    !content.childElementCount
+  ) {
+    scheduleOrdinarySurfaceRecovery();
+  }
+  return true;
+}
+
+/* 所有覆盖式功能最终都必须把普通图库 / 相簿交还给用户。这里集中做最后一次
+   可见性校验，只有内容树为空或残留特殊视图外壳时才重建，正常返回不增加一次
+   大图库重绘。 */
+function presentationOverlayOwnsPrimarySurface() {
+  const viewer = $("#viewer");
+  const slideshow = $("#albumSlideshow");
+  return Boolean(
+    state.photoWall ||
+    photoWallFrame ||
+    state.albumMapOpen ||
+    (state.activeId === "locations" && state.locationSubview === "map") ||
+    (viewer && !viewer.hidden) ||
+    (slideshow && !slideshow.hidden),
+  );
+}
+
+function ordinarySurfaceNeedsRecovery() {
+  const content = $("#content");
+  if (!content) return false;
+  const body = document.body;
+  return Boolean(
+    content.hidden ||
+    !content.childElementCount ||
+    content.classList.contains("photo-wall-mode") ||
+    body.classList.contains("photo-wall-active") ||
+    body.classList.contains("photo-wall-mode") ||
+    body.classList.contains("album-map-view-mode") ||
+    (body.classList.contains("location-assign-mode") && !state.albumMapOpen) ||
+    (body.classList.contains("filmstrip-view-mode") && !state.filmstrip) ||
+    body.classList.contains("slideshow-open") ||
+    body.classList.contains("viewer-open"),
+  );
+}
+
+function restoreOrdinarySurfaceAfterOverlay({ force = false } = {}) {
+  if (presentationOverlayOwnsPrimarySurface()) return false;
+  const content = $("#content");
+  if (!content || (!force && !ordinarySurfaceNeedsRecovery())) return false;
+  ordinarySurfaceRecoveryRendering = true;
+  try {
+    content.hidden = false;
+    content.classList.remove("photo-wall-mode");
+    if (!state.filmstrip) content.classList.remove("filmstrip-view-mode");
+    document.body.classList.remove(
+      "photo-wall-mode",
+      "photo-wall-active",
+      "photo-wall-exiting",
+      "album-map-view-mode",
+      "location-assign-mode",
+      "slideshow-open",
+      "viewer-open",
+      "viewer-returning",
+    );
+    render({ force: true });
+    revealRightContent({ animateEntrance: false });
+    return true;
+  } finally {
+    ordinarySurfaceRecoveryRendering = false;
+  }
+}
+
+function scheduleOrdinarySurfaceRecovery({ force = false, delay = 0 } = {}) {
+  ordinarySurfaceRecoveryForce ||= force;
+  if (ordinarySurfaceRecoveryTimer) return;
+  const check = () => {
+    ordinarySurfaceRecoveryTimer = 0;
+    if (presentationOverlayOwnsPrimarySurface()) {
+      ordinarySurfaceRecoveryAttempts += 1;
+      if (ordinarySurfaceRecoveryAttempts < 24) {
+        ordinarySurfaceRecoveryTimer = window.setTimeout(check, 100);
+      } else {
+        ordinarySurfaceRecoveryAttempts = 0;
+        ordinarySurfaceRecoveryForce = false;
+      }
+      return;
+    }
+    const forceRender = ordinarySurfaceRecoveryForce;
+    ordinarySurfaceRecoveryAttempts = 0;
+    ordinarySurfaceRecoveryForce = false;
+    restoreOrdinarySurfaceAfterOverlay({ force: forceRender });
+  };
+  ordinarySurfaceRecoveryTimer = window.setTimeout(check, Math.max(0, delay));
 }
 
 function syncSelectionBar() {
@@ -17892,36 +18643,62 @@ function waitForPhotoWallExitAnimation() {
   });
 }
 
-async function leavePhotoWallMode() {
+function leavePhotoWallMode() {
+  if (photoWallExitPromise) return photoWallExitPromise;
   /* 子应用已经挂载时，即使状态切换期间 photoWall 标志暂时落回 false，
      也必须完成退场并卸载 iframe，避免留下无法关闭的透明墙层。 */
   if (
     photoWallTransition === "exiting" ||
     (!state.photoWall && !photoWallFrame)
   )
-    return;
-  clearPhotoWallEnterTimeout();
-  clearPhotoWallLoadWatchdog();
-  clearPhotoWallPendingEntry();
-  hidePhotoWallLoading({ immediate: true });
-  photoWallPlaybackOpenSeq += 1;
-  const cancellingEntry = photoWallTransition === "entering";
-  document.body.classList.add("photo-wall-exiting");
-  photoWallTransition = "exiting";
-  photoWallFrame?.classList.add("is-exiting");
-  const childExit = waitForPhotoWallExitAnimation();
-  const backdropExit = restorePhotoWallBackdrop({
-    immediate: cancellingEntry,
+    return Promise.resolve();
+  const task = (async () => {
+    clearPhotoWallEnterTimeout();
+    clearPhotoWallLoadWatchdog();
+    clearPhotoWallPendingEntry();
+    hidePhotoWallLoading({ immediate: true });
+    photoWallPlaybackOpenSeq += 1;
+    const cancellingEntry = photoWallTransition === "entering";
+    document.body.classList.add("photo-wall-exiting");
+    photoWallTransition = "exiting";
+    photoWallFrame?.classList.add("is-exiting");
+    const childExit = waitForPhotoWallExitAnimation();
+    const backdropExit = restorePhotoWallBackdrop({
+      immediate: cancellingEntry,
+    });
+    await childExit;
+    unmountPhotoWallApp();
+    /* 墙面已经退净，原页面继续以少量模糊停留，再完成最后一段清晰化。 */
+    await backdropExit;
+    releasePhotoWallBackdrop();
+    const needsDeferredRender = pendingRenderAfterPhotoWall;
+    pendingRenderAfterPhotoWall = false;
+    state.photoWall = false;
+    state.photoWallPlayback = null;
+    photoWallTransition = "idle";
+    resumeContextMapPrewarmIfPossible();
+    snapshotCurrentView();
+    void flushPendingUpdate();
+    scheduleOrdinarySurfaceRecovery({ force: needsDeferredRender });
+  })();
+  const tracked = task.finally(() => {
+    if (photoWallExitPromise === tracked) photoWallExitPromise = null;
   });
-  await childExit;
-  unmountPhotoWallApp();
-  /* 墙面已经退净，原页面继续以少量模糊停留，再完成最后一段清晰化。 */
-  await backdropExit;
-  releasePhotoWallBackdrop();
-  state.photoWall = false;
-  state.photoWallPlayback = null;
-  photoWallTransition = "idle";
-  flushPendingUpdate();
+  photoWallExitPromise = tracked;
+  return tracked;
+}
+
+async function launchPhotoWallPlayback(playback) {
+  if (!playback || !ensureActiveLibraryFeature()) return false;
+  const launchSeq = ++photoWallLaunchSeq;
+  if (state.photoWall || photoWallTransition !== "idle") {
+    await leavePhotoWallMode();
+  }
+  if (launchSeq !== photoWallLaunchSeq) return false;
+  if (state.photoWall || photoWallTransition !== "idle") return false;
+  state.photoWallPlayback = playback;
+  setPhotoWall(true);
+  return state.photoWall === true;
 }
 
 function setPhotoWall(enabled) {
@@ -17929,7 +18706,9 @@ function setPhotoWall(enabled) {
     void leavePhotoWallMode();
     return;
   }
+  if (!ensureActiveLibraryFeature()) return;
   if (state.photoWall || photoWallTransition !== "idle") return;
+  pendingRenderAfterPhotoWall = false;
   document.body.classList.remove("photo-wall-exiting");
   state.filmstrip = false;
   if (!state.photoWallPlayback) {
@@ -17959,7 +18738,10 @@ function setPhotoWall(enabled) {
   }
 
   rememberPhotoWallPendingEntry("wall");
+  setContextMapPrewarmSuspended(true);
+  thumbClearDecodePool();
   state.photoWall = true;
+  snapshotCurrentView();
   state.edit = false;
   state.select = false;
   clearSelection();
@@ -17967,7 +18749,7 @@ function setPhotoWall(enabled) {
   $("#popMenu").hidden = true;
   photoWallTransition = "entering";
   photoWallInitRetryAttempted = false;
-  showPhotoWallLoading();
+  showPhotoWallLoading({ delay: PHOTO_WALL_LOADING_DELAY_MS });
   armPhotoWallEnterTimeout();
   armPhotoWallLoadWatchdog();
   preparePhotoWallBackdrop();
@@ -17975,6 +18757,7 @@ function setPhotoWall(enabled) {
 }
 
 function startCurrentPhotoWallAlbumPlayback() {
+  if (!ensureActiveLibraryFeature()) return false;
   const albumId = Number(state.photoWallAlbumId ?? state.activeId);
   if (!Number.isInteger(albumId)) return false;
   const album =
@@ -17992,7 +18775,7 @@ function startCurrentPhotoWallAlbumPlayback() {
   /* 单相簿播放使用的是进入相簿时已经读到的照片，不再请求"全部照片"
      或重新打开播放方式菜单。退出照片墙后仍停留在当前相簿网格。 */
   photoWallPlaybackOpenSeq += 1;
-  state.photoWallPlayback = {
+  const playback = {
     mode: "photos",
     albums: album ? [album] : [],
     photos,
@@ -18000,9 +18783,10 @@ function startCurrentPhotoWallAlbumPlayback() {
     seed: randomPhotoWallSeed(),
     currentAlbumId: null,
   };
-  warmMosaicWallThumbnails(photos);
+  /* 错落磁贴使用 photo-wall 缩略图；这里若顺手预热嵌合拼图的 1000px
+     图片，会在导入大相簿后额外排队上千张无关解码，放大渲染进程内存峰值。 */
   closeMenu({ duration: 0 });
-  setPhotoWall(true);
+  void launchPhotoWallPlayback(playback);
   return true;
 }
 
@@ -18017,16 +18801,22 @@ function randomPhotoWallSeed() {
 }
 
 async function startCurrentMasonryWall() {
+  if (!ensureActiveLibraryFeature()) return false;
   const libraryMode = state.activeId === "library";
   const album = libraryMode ? null : albumById(state.activeId);
   if (!libraryMode && (!album || kidsOf(album.id).length)) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   let photos = [];
   try {
     photos = album
       ? (await api(`/api/masonry-wall/photos?albums=${album.id}`)).items || []
       : (await api("/api/masonry-wall/photos")).items || [];
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = photos.filter((item) => item.kind === "photo");
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     closeMenu();
     alert(err.message);
     return false;
@@ -18037,8 +18827,7 @@ async function startCurrentMasonryWall() {
     return false;
   }
 
-  photoWallPlaybackOpenSeq += 1;
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "masonry",
     mode: "masonry",
     albumId: album?.id ?? null,
@@ -18049,21 +18838,26 @@ async function startCurrentMasonryWall() {
     currentAlbumId: null,
   };
   closeMenu({ duration: 0 });
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function startCurrentFilmrollWall() {
+  if (!ensureActiveLibraryFeature()) return false;
   const libraryMode = state.activeId === "library";
   const album = libraryMode ? null : albumById(state.activeId);
   if (!libraryMode && (!album || kidsOf(album.id).length)) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   let photos = [];
   try {
     photos = album
       ? (await api(`/api/filmroll-wall/photos?albums=${album.id}`)).items || []
       : (await api("/api/filmroll-wall/photos")).items || [];
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = photos.filter((item) => item.kind === "photo");
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     closeMenu();
     alert(err.message);
     return false;
@@ -18073,8 +18867,7 @@ async function startCurrentFilmrollWall() {
     toast("这个相簿里还没有可显示的照片");
     return false;
   }
-  photoWallPlaybackOpenSeq += 1;
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "filmroll",
     mode: "photowall",
     albumId: album?.id ?? null,
@@ -18085,19 +18878,24 @@ async function startCurrentFilmrollWall() {
     currentAlbumId: null,
   };
   closeMenu({ duration: 0 });
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 async function startCurrentMosaicWall() {
+  if (!ensureActiveLibraryFeature()) return false;
   const libraryMode = state.activeId === "library";
   const album = libraryMode ? null : albumById(state.activeId);
   if (!libraryMode && (!album || kidsOf(album.id).length)) return false;
+  const requestSeq = ++photoWallPlaybackOpenSeq;
+  const viewSeq = navSelectionSeq;
   let photos = [];
   try {
     photos = (await loadMosaicWallData(album ? [album.id] : null)).items || [];
+    if (requestSeq !== photoWallPlaybackOpenSeq || viewSeq !== navSelectionSeq)
+      return false;
     photos = photos.filter((item) => item.kind === "photo");
   } catch (err) {
+    if (requestSeq !== photoWallPlaybackOpenSeq) return false;
     closeMenu();
     alert(err.message);
     return false;
@@ -18107,8 +18905,7 @@ async function startCurrentMosaicWall() {
     toast("这个相簿里还没有可显示的照片");
     return false;
   }
-  photoWallPlaybackOpenSeq += 1;
-  state.photoWallPlayback = {
+  const playback = {
     wallKind: "mosaic",
     mode: "photowall",
     albumId: album?.id ?? null,
@@ -18119,8 +18916,7 @@ async function startCurrentMosaicWall() {
     currentAlbumId: null,
   };
   closeMenu({ duration: 0 });
-  setPhotoWall(true);
-  return true;
+  return launchPhotoWallPlayback(playback);
 }
 
 /* 普通照片网格的上 / 下拖动。与照片墙共用 Folia 的松手惯性参数，
@@ -19232,6 +20028,7 @@ async function selectAlbumWithContentHandoff(
   }
   flushPendingUpdate();
   syncToolbarForState();
+  scheduleOrdinarySurfaceRecovery();
 }
 
 async function select(id) {
@@ -19252,6 +20049,16 @@ async function select(id) {
     id === "locations"
       ? id
       : Number(id);
+  if (
+    (nextId === "photoWall" ||
+      nextId === "locations" ||
+      nextId === "favorites" ||
+      nextId === "trash" ||
+      Number.isInteger(nextId)) &&
+    !ensureActiveLibraryFeature()
+  ) {
+    return false;
+  }
   if (nextId === "locations" && nextId !== state.activeId) {
     locationsMapEntryFade = beginMapEntryFade();
   }
@@ -19273,12 +20080,16 @@ async function select(id) {
     (Number(targetAlbum.childCount || 0) > 0 || targetChildren.length > 0);
   const contentCrossfade =
     nextId !== state.activeId &&
-    (nextId === "library" || nextId === "favorites" || targetIsPhotoAlbum)
+    (nextId === "library" ||
+      nextId === "favorites" ||
+      nextId === "photoWall" ||
+      targetIsPhotoAlbum)
       ? beginContentCrossfade()
       : null;
   const contentExitFade =
+    !contentCrossfade &&
     nextId !== state.activeId &&
-    (nextId === "all" || nextId === "photoWall" || targetIsAlbumGrid)
+    (nextId === "all" || targetIsAlbumGrid)
       ? beginContentExitFade()
       : null;
   if (nextId === "photoWall") {
@@ -19447,6 +20258,7 @@ async function select(id) {
   if (nextId === "photoWall") clearPhotoWallPendingEntry();
   if (nextId === "photoWall") hidePhotoWallLoading();
   flushPendingUpdate();
+  scheduleOrdinarySurfaceRecovery();
 }
 
 let emptyFavoritesNavigation = null;
@@ -21992,25 +22804,26 @@ function syncSelbar() {
         ? "items"
         : "个项目";
     const unit = numbering ? numberingUnit : selectionUnit(selectedItems());
+    const selectedCount = formatCount(state.selected.size);
     countText = uiLanguageIsEnglish()
       ? numbering
-        ? `${state.selected.size} ${unit} selected in order`
-        : `${state.selected.size} ${unit} selected`
+        ? `${selectedCount} ${unit} selected in order`
+        : `${selectedCount} ${unit} selected`
       : numbering
-        ? `已按顺序选择 ${state.selected.size} ${unit}`
-        : `已选择 ${state.selected.size} ${unit}`;
+        ? `已按顺序选择 ${selectedCount} ${unit}`
+        : `已选择 ${selectedCount} ${unit}`;
   }
   const count = $("#selCount");
   /* 计数 odometer-lite：句子里的第一个数字包成 .selbar-count-num，
      数值变化时让新数字从下方滚入定位，批量勾选时不突变。
      中 / 英、编号、回收站各变体都把计数写成数字串，统一命中。 */
   const countHTML = esc(countText).replace(
-    /\d+/,
+    /[\d,]+/,
     (digits) => `<span class="selbar-count-num">${digits}</span>`,
   );
   if (count.dataset.html !== countHTML) {
     const prevValue = count.dataset.value;
-    const nextValue = (countText.match(/\d+/) || [""])[0];
+    const nextValue = (countText.match(/[\d,]+/) || [""])[0];
     count.dataset.html = countHTML;
     count.dataset.value = nextValue;
     count.innerHTML = countHTML;
@@ -22058,6 +22871,7 @@ function syncSelbar() {
   }
   syncSelbarRovingFocus();
   syncBackToTop();
+  scheduleCornerMaterialSync();
 }
 
 function selbarFocusableActions() {
@@ -22430,7 +23244,7 @@ function pickerRowHTML(album, level) {
       }</span>`;
   /* 张数跟相簿卡片一个规矩：一张照片都没有（纯粹装相簿的）就不写 */
   const count = album.count
-    ? `<span class="picker-count">${album.count}</span>`
+    ? `<span class="picker-count">${formatCount(album.count)}</span>`
     : "";
   const current = album.id === state.activeId;
   /* 当前正开着的这个相簿：标一下「当前」—— 照片本来就在里面，搬过去等于没搬 */
@@ -22958,6 +23772,11 @@ async function moveSelectedTo(albumId) {
   const beforeLayout = capturePhotoLayout();
   const previousItemIds = state.items.map((item) => Number(item.id));
   const scrollTop = $("#content").scrollTop;
+  const photoAnchor =
+    state.activeId === "library" ||
+    (Number.isInteger(state.activeId) && albumById(state.activeId))
+      ? libraryTimelineAnchorSnapshot()
+      : null;
   const beforeAlbums = state.albums;
   const snapshot = capturePhotoRemovalSnapshot();
   const sourceAlbum =
@@ -23670,8 +24489,7 @@ async function saveViewerItemDate(ms, item) {
     const shown = state.items[viewerIndex];
     if (shown) {
       $("#viewerTitle").textContent = shown.name;
-      $("#viewerCounter").textContent =
-        `${viewerIndex + 1} / ${state.items.length}`;
+      $("#viewerCounter").textContent = `${viewerIndex + 1}/${state.items.length}`;
       $("#viewer").classList.toggle("has-multi", state.items.length > 1);
       refreshOpenItemInfo(editedId);
     }
@@ -24354,21 +25172,17 @@ function cyclePhotoStyle({ animate = false } = {}) {
 /* ---------------------- 相簿 / 图库照片墙四档大小 ---------------------- */
 
 const GALLERY_WHEEL_GESTURE_IDLE_MS = 90;
-/* 触控板捏合发来的 ctrl+wheel 是一串很小的增量（一格鼠标滚轮约 100px）。
-   锁定期间继续累计这些增量，走够一段就放行下一档，一次捏合因此能连贯地
-   跨好几档，跟 iOS 相册的捏合手感一致；鼠标滚轮仍是一格一档，
-   不会一推就飞到底。 */
-const GALLERY_WHEEL_PINCH_REPEAT_PX = 160;
+/* 触控板捏合会发来一串很小的 ctrl+wheel 增量，鼠标滚轮则是一格较大的增量。
+   手势期间都只累计视觉缩放；停下后才提交到最近的一档。 */
 const galleryWheelIsPinch = (event) =>
   event.deltaMode === 0 &&
   Math.abs(event.deltaY) < ALBUM_WHEEL_SMOOTHING.minNotchPx;
-const GALLERY_ZOOM_MS = 180;
+const GALLERY_ZOOM_MS = 220;
+const GALLERY_ZOOM_REDUCED_MS = 140;
 const GALLERY_FLIP_TILE_LIMIT = 140;
-/* 浏览界面只使用按网格档位生成的缩略图。高分辨率图片留给查看器和编辑器。 */
-const GALLERY_HIGH_RES_MIN = GALLERY_ZOOM_MAX + 1;
-const GALLERY_HIGH_RES_SIZE = 800;
-const GALLERY_BLANK_IMAGE =
-  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+/* 浏览界面只使用网格缩略图。标准档及以上的细节层固定为 400px，
+   查看器和编辑器才加载真正的大图。 */
+const GALLERY_DETAIL_MIN = GALLERY_STANDARD_ZOOM;
 let galleryImageWindowObserver = null;
 let galleryImageWindowRoot = null;
 let galleryImageWindowMargin = "";
@@ -24381,13 +25195,20 @@ function resetGalleryZoomForViewChange() {
   galleryZoomTarget = GALLERY_STANDARD_ZOOM;
   galleryZoomPending = 0;
   galleryZoomFocusPoint = null;
-  galleryWheelAccum = 0;
-  galleryWheelLocked = false;
-  clearTimeout(galleryWheelTimer);
-  clearTimeout(galleryWheelUnlockTimer);
+  galleryWheelPreviewLog = 0;
+  galleryWheelPreviewBaseLevel = GALLERY_STANDARD_ZOOM;
+  galleryWheelPreviewFocus = null;
+  clearTimeout(galleryWheelSettleTimer);
+  clearTimeout(galleryWheelCommitTimer);
+  clearTimeout(galleryWheelMouseUnlockTimer);
+  galleryWheelSettleTimer = 0;
+  galleryWheelCommitTimer = 0;
+  galleryWheelMouseUnlockTimer = 0;
+  galleryWheelMouseLocked = false;
+  galleryWheelMouseDirection = 0;
+  galleryWheelMouseLastAt = 0;
   cancelGalleryLabelRefresh();
-  galleryWheelTimer = 0;
-  galleryWheelUnlockTimer = 0;
+  clearGalleryWheelZoomPreview();
   cancelGalleryZoomMotion();
   syncGalleryGridInteractionState();
 }
@@ -24430,14 +25251,23 @@ function galleryTileThumbSrc(tile) {
   return itemThumbUrl(item, galleryThumbSizeForZoom(), "inside");
 }
 
-function restoreGalleryImageQuality(grid) {
+function restoreGalleryImageQuality(grid, level = state.photoZoom) {
   if (!grid) return;
   const targetSize = String(galleryThumbSizeForZoom());
   for (const tile of grid.querySelectorAll(".tile[data-index]")) {
-    tile
-      .querySelectorAll(".gallery-full-overlay")
-      .forEach((overlay) => overlay.remove());
-    const img = tile.querySelector(".crop > img");
+    const item = state.items[Number(tile.dataset.index)];
+    const desiredDetail = galleryQualitySrc(item, level);
+    tile.querySelectorAll(".gallery-full-overlay").forEach((overlay) => {
+      if (
+        !desiredDetail ||
+        overlay.dataset.galleryQualitySrc !== desiredDetail
+      ) {
+        overlay.remove();
+      }
+    });
+    const img = tile.querySelector(
+      ".crop > img:not(.gallery-full-overlay):not(.gallery-thumb-l0)",
+    );
     if (!img) continue;
     delete img.dataset.thumbSrc;
     delete img.dataset.galleryQualitySrc;
@@ -24453,9 +25283,19 @@ function loadGalleryWindowImage(tile) {
   const img = tile.querySelector(".crop > img");
   const src = galleryTileThumbSrc(tile);
   if (!img || !src) return;
+  /* 最小三档一屏格子很多。滚动期间只让已经显示的网格图和 L0 参与合成，
+     新进入窗口的格子等滚动停稳后再取网格图，避免解码和滚动抢帧。 */
+  if (
+    state.photoZoom < GALLERY_STANDARD_ZOOM &&
+    document.documentElement.classList.contains("gallery-is-scrolling") &&
+    img.getAttribute("src") !== src
+  ) {
+    return;
+  }
   delete img.dataset.galleryWindowUnloaded;
   img.dataset.galleryThumbSize = String(galleryThumbSizeForZoom());
   img.loading = "eager";
+  img.fetchPriority = "high";
   if (img.getAttribute("src") !== src) {
     img.dataset.galleryThumbRetrySource = src;
     img.dataset.galleryThumbRetryAttempt = "0";
@@ -24490,6 +25330,7 @@ function unloadGalleryWindowImage(tile) {
   if (img.getAttribute("src") !== GALLERY_BLANK_IMAGE) {
     img.src = GALLERY_BLANK_IMAGE;
   }
+  img.fetchPriority = "low";
   tile.classList.remove("is-media-ready", "is-load-failed");
   tile.querySelector(".tile-retry")?.remove();
 }
@@ -24502,7 +25343,303 @@ function resetGalleryImageWindow() {
   galleryImageWindowObserved = new WeakSet();
 }
 
+/* 一页图集解码后约 512×512×4 = 1MB。128 页正好覆盖常见 7,000～8,000 张
+   图库，任意时间轴跳转都能直接拿到真实低清画面，而不是先看到一排骨架。
+   更大图库仍由浏览器长期 HTTP 缓存兜底，页面按 LRU 收口。 */
+const GALLERY_ATLAS_CACHE_LIMIT = 128;
+const galleryAtlasPages = new Map();
+const galleryAtlasWarmQueued = new Set();
+const galleryAtlasWarmQueue = [];
+let galleryAtlasViewKey = "";
+let galleryAtlasWarmViewKey = "";
+let galleryAtlasWarmTimer = 0;
+let galleryAtlasWarmActive = 0;
+
+function galleryAtlasKeyFor(items = state.items) {
+  if (!items.length) return "";
+  /* 当前已渲染内容的索引已经算过整库签名，直接复用。以前每个新格子都会
+     再扫一遍全库，最小档一次补齐数千格时会变成平方级开销。 */
+  const viewKey =
+    items === state.items && renderedContentView?.baseKey
+      ? renderedContentView.baseKey
+      : ordinaryContentView()?.baseKey || "";
+  return [
+    activeRootCacheKey(),
+    state.activeId,
+    lastRev,
+    viewKey,
+    items.length,
+    items[0]?.id ?? "",
+    items[items.length - 1]?.id ?? "",
+  ].join(":");
+}
+
+function resetGalleryAtlasPages() {
+  for (const entry of galleryAtlasPages.values()) {
+    entry.image?.removeAttribute("src");
+  }
+  galleryAtlasPages.clear();
+  galleryAtlasViewKey = "";
+  galleryAtlasWarmViewKey = "";
+  galleryAtlasWarmQueue.length = 0;
+  galleryAtlasWarmQueued.clear();
+  if (galleryAtlasWarmTimer) window.clearTimeout(galleryAtlasWarmTimer);
+  galleryAtlasWarmTimer = 0;
+}
+
+function trimGalleryAtlasPages() {
+  while (galleryAtlasPages.size > GALLERY_ATLAS_CACHE_LIMIT) {
+    const [page, entry] = galleryAtlasPages.entries().next().value;
+    galleryAtlasPages.delete(page);
+    entry.image?.removeAttribute("src");
+  }
+}
+
+function galleryAtlasPageItems(page, items = state.items) {
+  const start = page * GALLERY_ATLAS_PAGE_SIZE;
+  return items.slice(start, start + GALLERY_ATLAS_PAGE_SIZE);
+}
+
+function galleryAtlasPageUrl(
+  page,
+  items = state.items,
+  { background = false } = {},
+) {
+  const pageItems = galleryAtlasPageItems(page, items);
+  if (!pageItems.length) return "";
+  const ids = pageItems.map((item) => Number(item.id)).join(",");
+  const version = galleryAtlasKeyFor(items);
+  return (
+    `/api/thumbs/atlas?ids=${encodeURIComponent(ids)}` +
+    `&cell=${GALLERY_ATLAS_CELL_SIZE}&cols=${GALLERY_ATLAS_COLUMNS}` +
+    `&format=${GALLERY_ATLAS_FORMAT_VERSION}` +
+    `&v=${encodeURIComponent(version)}` +
+    (background ? "&lane=background" : "")
+  );
+}
+
+function applyGalleryAtlasPage(page, entry) {
+  for (const layer of document.querySelectorAll(
+    `.photo-grid .gallery-thumb-atlas[data-gallery-atlas-page="${page}"]`,
+  )) {
+    const tile = layer.closest(".tile");
+    if (!tile) continue;
+    layer.style.backgroundImage = `url(${JSON.stringify(entry.url)})`;
+    tile.classList.add("has-thumb-atlas");
+  }
+}
+
+function applyGalleryAtlasTile(tile) {
+  if (!tile) return false;
+  const layer = tile.querySelector(".crop > .gallery-thumb-atlas");
+  const page = Number(layer?.dataset.galleryAtlasPage);
+  const entry = galleryAtlasPages.get(page);
+  if (entry?.status !== "loaded") return false;
+  if (!layer) return false;
+  layer.style.backgroundImage = `url(${JSON.stringify(entry.url)})`;
+  tile.classList.add("has-thumb-atlas");
+  return true;
+}
+
+function loadGalleryAtlasPage(
+  page,
+  items = state.items,
+  { background = false } = {},
+) {
+  const key = galleryAtlasKeyFor(items);
+  if (key !== galleryAtlasViewKey) {
+    resetGalleryAtlasPages();
+    galleryAtlasViewKey = key;
+  }
+  const existing = galleryAtlasPages.get(page);
+  if (existing && existing.status !== "error") return existing.promise;
+  galleryAtlasPages.delete(page);
+  existing?.image?.removeAttribute("src");
+  const url = galleryAtlasPageUrl(page, items, { background });
+  if (!url) return Promise.resolve(false);
+  const image = new Image();
+  image.decoding = "async";
+  /* 后台图集只吃空闲带宽；若用户已经走到这页，单独的可见请求会把它提升。 */
+  image.fetchPriority = background ? "low" : "high";
+  const entry = {
+    image,
+    url,
+    status: "loading",
+    promise: null,
+  };
+  entry.promise = new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      if (key !== galleryAtlasViewKey) {
+        entry.status = "stale";
+        image.removeAttribute("src");
+        resolve(false);
+        return;
+      }
+      entry.status = ready ? "loaded" : "error";
+      if (ready) {
+        galleryAtlasPages.delete(page);
+        galleryAtlasPages.set(page, entry);
+        trimGalleryAtlasPages();
+        applyGalleryAtlasPage(page, entry);
+      } else {
+        /* 失败页不留在缓存里。下次格子重建或视野回来时会重新请求，
+           避免一次超时让这一整页永久退化成单张 L0。 */
+        galleryAtlasPages.delete(page);
+        image.removeAttribute("src");
+      }
+      resolve(ready);
+    };
+    image.onload = () => finish(image.naturalWidth > 0);
+    image.onerror = () => finish(false);
+    const timer = window.setTimeout(
+      () => finish(false),
+      GALLERY_ATLAS_TIMEOUT_MS,
+    );
+    image.src = url;
+  });
+  galleryAtlasPages.set(page, entry);
+  return entry.promise;
+}
+
+function activateGalleryLowResFallback(tile) {
+  if (!tile?.isConnected || tile.classList.contains("has-thumb-atlas")) {
+    return;
+  }
+  const img = tile.querySelector("img.gallery-thumb-l0");
+  const source = img?.dataset.galleryLowResSrc;
+  if (!img || !source || img.getAttribute("src")) return;
+  img.src = source;
+}
+
+function requestGalleryAtlasTile(tile) {
+  if (!tile) return;
+  const page = Number(
+    tile.querySelector(".crop > .gallery-thumb-atlas")?.dataset
+      .galleryAtlasPage,
+  );
+  if (!Number.isInteger(page) || page < 0) return;
+  if (!applyGalleryAtlasTile(tile)) {
+    /* 图集页还没进内存时立刻按单张 48px 兜底，别等图集 promise。
+       新格子从创建那一帧就开始请求真实画面，快速跳转不会先停在一排空白上。 */
+    activateGalleryLowResFallback(tile);
+    void loadGalleryAtlasPage(page).then((ready) => {
+      if (!tile.isConnected) return;
+      if (ready && applyGalleryAtlasTile(tile)) return;
+      activateGalleryLowResFallback(tile);
+    });
+  }
+}
+
+async function preloadGalleryAtlasPagesForItems(items) {
+  const source = state.items;
+  const pageSet = new Set();
+  const indexById = new Map(
+    source.map((item, index) => [Number(item.id), index]),
+  );
+  for (const item of items || []) {
+    const index = indexById.get(Number(item?.id));
+    if (index == null) continue;
+    pageSet.add(Math.floor(index / GALLERY_ATLAS_PAGE_SIZE));
+  }
+  if (!pageSet.size) return false;
+  const results = await Promise.all(
+    [...pageSet].map((page) => loadGalleryAtlasPage(page, source)),
+  );
+  return results.length > 0 && results.every(Boolean);
+}
+
+function galleryAtlasWarmWanted() {
+  return Boolean(
+    !document.hidden &&
+    canZoomGallery() &&
+    $("#viewer")?.hidden &&
+    !state.busy &&
+    !rootImportRunning() &&
+    !galleryZoomBusy &&
+    !document.documentElement.classList.contains("gallery-is-scrolling"),
+  );
+}
+
+function scheduleGalleryAtlasWarm(delay = GALLERY_ATLAS_WARM_DELAY_MS) {
+  if (galleryAtlasWarmTimer) return;
+  galleryAtlasWarmTimer = window.setTimeout(() => {
+    galleryAtlasWarmTimer = 0;
+    void pumpGalleryAtlasWarm();
+  }, delay);
+}
+
+function pumpGalleryAtlasWarm() {
+  if (!galleryAtlasWarmQueue.length) return;
+  if (!galleryAtlasWarmWanted()) {
+    scheduleGalleryAtlasWarm(GALLERY_ATLAS_WARM_IDLE_MS);
+    return;
+  }
+  const key = galleryAtlasKeyFor();
+  if (!key || key !== galleryAtlasWarmViewKey) {
+    queueGalleryAtlasWarm();
+    return;
+  }
+  while (
+    galleryAtlasWarmActive < GALLERY_ATLAS_WARM_CONCURRENCY &&
+    galleryAtlasWarmQueue.length
+  ) {
+    const page = galleryAtlasWarmQueue.shift();
+    if (page == null) continue;
+    galleryAtlasWarmActive += 1;
+    void loadGalleryAtlasPage(page, state.items, { background: true }).finally(
+      () => {
+        galleryAtlasWarmActive = Math.max(0, galleryAtlasWarmActive - 1);
+        galleryAtlasWarmQueued.delete(page);
+        if (
+          galleryAtlasWarmQueue.length &&
+          galleryAtlasKeyFor() === galleryAtlasWarmViewKey
+        ) {
+          scheduleGalleryAtlasWarm(0);
+        }
+      },
+    );
+  }
+}
+
+function queueGalleryAtlasWarm(items = state.items) {
+  const key = galleryAtlasKeyFor(items);
+  if (!key) return;
+  if (key !== galleryAtlasWarmViewKey) {
+    galleryAtlasWarmViewKey = key;
+    galleryAtlasWarmQueue.length = 0;
+    galleryAtlasWarmQueued.clear();
+  }
+  const enqueue = (page) => {
+    if (
+      !Number.isInteger(page) ||
+      page < 0 ||
+      galleryAtlasWarmQueued.has(page) ||
+      galleryAtlasPages.get(page)?.status === "loaded"
+    ) {
+      return;
+    }
+    galleryAtlasWarmQueued.add(page);
+    galleryAtlasWarmQueue.push(page);
+  };
+  const range = galleryViewportIndexRange();
+  if (range) {
+    const firstPage = Math.floor(range.first / GALLERY_ATLAS_PAGE_SIZE);
+    const lastPage = Math.floor(range.last / GALLERY_ATLAS_PAGE_SIZE);
+    for (let page = firstPage; page <= lastPage; page += 1) enqueue(page);
+  }
+  const pageCount = Math.ceil(items.length / GALLERY_ATLAS_PAGE_SIZE);
+  for (let page = 0; page < pageCount; page += 1) enqueue(page);
+  if (galleryAtlasWarmQueue.length) scheduleGalleryAtlasWarm(0);
+}
+
 function observeGalleryImageTile(tile) {
+  requestGalleryAtlasTile(tile);
   if (!galleryImageWindowObserver || !tile) return;
   if (galleryImageWindowObserved.has(tile)) return;
   galleryImageWindowObserved.add(tile);
@@ -24590,6 +25727,17 @@ function observeGalleryImageTiles(grids = photoLayoutGrids()) {
   scheduleVisibleGalleryImageSweep(grids);
 }
 
+function observeGalleryDetailTile(tile) {
+  if (
+    !tile?.isConnected ||
+    state.photoZoom < GALLERY_DETAIL_MIN ||
+    !galleryFullObserver
+  ) {
+    return;
+  }
+  galleryFullObserver.observe(tile);
+}
+
 /* ---------------------- 缩略图解码缓存 ---------------------- */
 /* 「滑回去还要重新加载一遍」拆开是三笔开销：
    1. 虚拟网格把滑出窗口的格子整个 remove()，回来时重建节点；
@@ -24601,13 +25749,20 @@ function observeGalleryImageTiles(grids = photoLayoutGrids()) {
 
 /* 解码后的位图按 宽 × 高 × 4 字节算内存。这里只管「离屏」那一份的预算：
    屏幕上活着的格子由虚拟窗口自己按行数限住，不必再算一遍。
-   预算跟着机器内存走（deviceMemory 单位是 GB），8GB 及以上给满额。 */
-const THUMB_DECODE_POOL_BUDGET_BASE_MB = 96;
-const THUMB_DECODE_POOL_BUDGET_MIN_MB = 48;
-const THUMB_DECODE_POOL_BUDGET_MAX_MB = 160;
+   预算跟着机器内存走（deviceMemory 单位是 GB），8GB 及以上给满额。
+   192px 网格图单张约 150KB，192MB 能跨过随机跳转再回来的几屏距离；
+   不继续堆到 GB 级，因为那会明显增加回收和整窗渲染压力。 */
+const THUMB_DECODE_POOL_BUDGET_BASE_MB = 192;
+const THUMB_DECODE_POOL_BUDGET_MIN_MB = 96;
+const THUMB_DECODE_POOL_BUDGET_MAX_MB = 256;
 /* 数量上限：最小档一格才几十 KB，只按内存收口会在池子里攒下上万个节点，
    光是遍历和淘汰就够慢的。 */
-const THUMB_DECODE_POOL_MAX_ENTRIES = 900;
+const THUMB_DECODE_POOL_MAX_ENTRIES = 1800;
+/* 最近两个稳定视野是随机跳转的返程锚点。只记 URL，不复制位图：
+   离开视野的 <img> 进入解码池后，这些 URL 会优先躲过普通 LRU 淘汰。 */
+const THUMB_DECODE_PROTECTED_VIEW_LIMIT = 2;
+const thumbDecodeProtectedViews = [];
+const thumbDecodeProtectedUrls = new Set();
 /* 记住多少条「已经上过屏」的 URL。一条几十字节，两万条不到 2MB，
    换来的是滚回看过的区域时连一帧灰底都不闪。 */
 const THUMB_PAINTED_URL_LIMIT = 20000;
@@ -24640,6 +25795,49 @@ const thumbImageBytes = (img) =>
 /* 池子的键就是 <img src="..."> 的字面值，和 itemTile 生成的 URL 完全一致，
    回收和领用才对得上。currentSrc 是绝对地址，不能拿来当键。 */
 const thumbImageKey = (img) => img?.getAttribute?.("src") || "";
+
+function clearThumbDecodeProtectedViews() {
+  thumbDecodeProtectedViews.length = 0;
+  thumbDecodeProtectedUrls.clear();
+}
+
+/* 记住刚停稳的视野。图片还在 DOM 里时 URL 也会先记下，
+   等虚拟网格把它们捐进解码池，保护就已生效。 */
+function rememberThumbDecodeViewport() {
+  const range = galleryViewportIndexRange();
+  if (!range || !state.items.length) return;
+  const size = galleryThumbSizeForZoom();
+  const firstItem = state.items[range.first];
+  const lastItem = state.items[range.last];
+  if (!firstItem || !lastItem) return;
+  const key = [
+    state.activeId,
+    size,
+    range.first,
+    range.last,
+    firstItem.id,
+    lastItem.id,
+  ].join(":");
+  const previousIndex = thumbDecodeProtectedViews.findIndex(
+    (view) => view.key === key,
+  );
+  if (previousIndex === 0) return;
+  if (previousIndex > 0) thumbDecodeProtectedViews.splice(previousIndex, 1);
+  const urls = new Set();
+  for (let index = range.first; index <= range.last; index += 1) {
+    const item = state.items[index];
+    if (item) urls.add(itemThumbUrl(item, size, "inside"));
+  }
+  if (!urls.size) return;
+  thumbDecodeProtectedViews.unshift({ key, urls });
+  while (thumbDecodeProtectedViews.length > THUMB_DECODE_PROTECTED_VIEW_LIMIT) {
+    thumbDecodeProtectedViews.pop();
+  }
+  thumbDecodeProtectedUrls.clear();
+  for (const view of thumbDecodeProtectedViews) {
+    for (const url of view.urls) thumbDecodeProtectedUrls.add(url);
+  }
+}
 
 function thumbRememberPainted(url) {
   if (!url || url.startsWith("data:") || thumbPaintedUrls.has(url)) return;
@@ -24699,12 +25897,19 @@ function thumbPoolTake(url) {
 const thumbPoolHas = (url) => !!url && thumbDecodePool.has(url);
 
 /* 先按内存预算收，再按数量收，两个都从最旧的开始丢。
+   最近两个稳定视野里的图先跳过；如果保护区域自身就超预算，
+   第二遍再回收最旧的，保证内存上限仍然有效。
    Map 在迭代过程中删掉当前项是明确定义的，不用先拷一份键出来。 */
 function thumbTrimDecodePool(budget = THUMB_DECODE_POOL_BUDGET) {
   const satisfied = () =>
     thumbDecodePoolBytes <= budget &&
     thumbDecodePool.size <= THUMB_DECODE_POOL_MAX_ENTRIES;
   if (satisfied()) return;
+  for (const [url] of thumbDecodePool) {
+    if (satisfied()) break;
+    if (thumbDecodeProtectedUrls.has(url)) continue;
+    thumbPoolForget(url);
+  }
   for (const [url] of thumbDecodePool) {
     if (satisfied()) break;
     thumbPoolForget(url);
@@ -24715,15 +25920,17 @@ function thumbClearDecodePool() {
   for (const [, img] of thumbDecodePool) thumbDiscardPoolImage(img);
   thumbDecodePool.clear();
   thumbDecodePoolBytes = 0;
+  clearThumbDecodeProtectedViews();
 }
 
-/* 换网格档位 = 换一档缩略图尺寸，池子里全是旧尺寸的 URL，
-   留着只会白占内存，直接清掉。 */
+/* 四种布局共用同一张 192px 网格图，节点池也共用同一个字节预算。
+   标准档及以上的 400px 细节层只是额外覆盖层，不替换网格资源。
+   只有预算或数量到顶才按 LRU 淘汰，不会因为换布局或缩放整池作废。 */
 function syncThumbDecodePoolZoomSize(level = state.photoZoom) {
   const size = galleryThumbSizeForZoom(level);
   if (thumbDecodePoolZoomSize === size) return;
-  if (thumbDecodePoolZoomSize) thumbClearDecodePool();
   thumbDecodePoolZoomSize = size;
+  thumbTrimDecodePool();
 }
 
 /* 格子被回收时把已经解码好的 <img> 摘下来交给池子。节点还是那张图，
@@ -24746,7 +25953,9 @@ function donateThumbDecodeImage(tile) {
 function adoptThumbDecodeImage(tile) {
   const placeholder = tile?.querySelector?.(".crop > img");
   if (!placeholder) return null;
-  const img = thumbPoolTake(thumbImageKey(placeholder));
+  const img = thumbPoolTake(
+    placeholder.dataset.galleryThumbSrc || thumbImageKey(placeholder),
+  );
   if (!img) return null;
   /* 池子里的节点是上一轮回收进来的，加载属性和事件都要按新格子重新接一遍：
      之后换档或重试会改 src，那时候还得靠 onload / onerror 走原来的流程。 */
@@ -24803,7 +26012,12 @@ const THUMB_PREFETCH_WARMED_LIMIT = 24000;
    并发压到 6：再高就会和可见区的请求抢连接，反而拖慢用户正在看的那一格。 */
 const THUMB_DECODE_AHEAD_CONCURRENCY = 6;
 /* 一次最多提前解码多少张，够滑好几屏，也免得池子被远处的图占满。 */
-const THUMB_DECODE_AHEAD_LIMIT = 600;
+const THUMB_DECODE_AHEAD_LIMIT = 1800;
+/* 全库文件仍可后台落盘，但真正解码只覆盖当前视野左右各约两屏。
+   批量小图时一屏可能有上千格，所以半径跟着实际可见数量伸缩。 */
+const THUMB_DECODE_AHEAD_VIEWPORT_RADIUS = 2;
+const THUMB_DECODE_AHEAD_MIN_RADIUS = 180;
+const THUMB_DECODE_AHEAD_MAX_RADIUS = 2400;
 /* 滚动中不解码：解码是主线程的活儿，和滚动抢帧只会让画面更卡。
    停下来这么久之后才恢复。 */
 const THUMB_DECODE_AHEAD_SCROLL_QUIET_MS = 140;
@@ -24883,6 +26097,9 @@ function thumbPrefetchReady() {
   if (thumbPrefetchInFlight) return false;
   if (!$("#viewer")?.hidden) return false;
   if (state.busy || rootImportRunning()) return false;
+  if (document.documentElement.classList.contains("gallery-is-scrolling")) {
+    return false;
+  }
   /* 渐进填充还在往网格里塞格子，这时候量出来的可见区不准。 */
   return !hasIncompleteProgressivePhotoGrid();
 }
@@ -24900,15 +26117,8 @@ function buildThumbPrefetchPlan(range) {
   for (let index = range.first - 1; index >= upStart; index -= 1) {
     plan.push(items[index]);
   }
-  /* 近处这两段排完之后，接着往两端把整库铺满。刚导入的图库缩略图全是冷的，
-     只补 ±2400 张意味着用户第一次滑到更远处仍然得等现做；空闲名额本来就闲着，
-     让它在后台一路做完，之后不管跳到哪一段都是热的。 */
-  for (let index = downEnd + 1; index < items.length; index += 1) {
-    plan.push(items[index]);
-  }
-  for (let index = upStart - 1; index >= 0; index -= 1) {
-    plan.push(items[index]);
-  }
+  /* 高清 L1 只为当前附近的真实意图准备。整库持久化交给 48px L0；
+     否则用户停住不动时，软件会长时间替看不见的照片生成高清缓存。 */
   return plan.filter(Boolean);
 }
 
@@ -24962,6 +26172,214 @@ function rememberThumbPrefetchWarmed(keys) {
   }
 }
 
+/* ------------------- 导入后全库标准网格图预热 ------------------- */
+/* 标准档是用户最常停留的 400px 细节图。可见区、滚动方向和查看器仍走上面
+   那条交互优先队列；这里再用更慢的后台节奏把整个当前图库的细节图补齐。
+   服务端同一任务只生成一次，且后台任务会被任何可见区请求提升到前台，
+   所以全库补齐不会让用户正在看的那一屏排队等候。 */
+const LIBRARY_STANDARD_THUMB_SIZE = GALLERY_GRID_DETAIL_SIZE;
+const LIBRARY_STANDARD_WARM_BATCH = 48;
+const LIBRARY_STANDARD_WARM_TICK_MS = 320;
+const LIBRARY_STANDARD_WARM_IDLE_MS = 1200;
+const LIBRARY_STANDARD_WARM_TIMEOUT_MS = 60000;
+const LIBRARY_STANDARD_WARM_STORAGE_KEY =
+  "fotora-library-standard-thumb-warm-v3";
+
+let libraryStandardWarmPlan = [];
+let libraryStandardWarmCursor = 0;
+let libraryStandardWarmSignature = "";
+let libraryStandardWarmTimer = 0;
+let libraryStandardWarmInFlight = null;
+let libraryStandardWarmGeneration = 0;
+
+function libraryStandardWarmItems() {
+  if (state.activeId !== "library") return [];
+  return state.albumItems.length ? state.albumItems : state.albumItemsRaw;
+}
+
+function libraryStandardWarmSignatureFor(items) {
+  if (!items.length) return "";
+  return [
+    activeRootCacheKey(),
+    String(lastRev ?? ""),
+    items.length,
+    items[0]?.id ?? "",
+    items[items.length - 1]?.id ?? "",
+  ].join(":");
+}
+
+function libraryStandardWarmMarkedDone(signature) {
+  if (!signature) return false;
+  try {
+    return (
+      localStorage.getItem(
+        `${LIBRARY_STANDARD_WARM_STORAGE_KEY}:${activeRootCacheKey()}`,
+      ) === signature
+    );
+  } catch {
+    return false;
+  }
+}
+
+function markLibraryStandardWarmDone(signature = libraryStandardWarmSignature) {
+  if (!signature) return;
+  try {
+    localStorage.setItem(
+      `${LIBRARY_STANDARD_WARM_STORAGE_KEY}:${activeRootCacheKey()}`,
+      signature,
+    );
+  } catch {}
+}
+
+function stopLibraryStandardThumbWarm({ clearPlan = true } = {}) {
+  clearTimeout(libraryStandardWarmTimer);
+  libraryStandardWarmTimer = 0;
+  libraryStandardWarmGeneration += 1;
+  const flight = libraryStandardWarmInFlight;
+  if (flight) {
+    libraryStandardWarmCursor = flight.startCursor;
+    flight.controller.abort();
+  }
+  libraryStandardWarmInFlight = null;
+  if (clearPlan) {
+    libraryStandardWarmPlan = [];
+    libraryStandardWarmCursor = 0;
+    libraryStandardWarmSignature = "";
+  }
+}
+
+function libraryStandardWarmReady() {
+  return Boolean(
+    !document.hidden &&
+    state.activeId === "library" &&
+    state.items.length &&
+    !state.busy &&
+    !rootImportRunning() &&
+    !galleryZoomBusy &&
+    !state.select &&
+    !state.edit &&
+    $("#viewer")?.hidden &&
+    !galleryAtlasWarmActive &&
+    !galleryAtlasWarmQueue.length &&
+    !document.documentElement.classList.contains("gallery-is-scrolling"),
+  );
+}
+
+function scheduleLibraryStandardThumbWarm(
+  delay = LIBRARY_STANDARD_WARM_TICK_MS,
+) {
+  if (libraryStandardWarmTimer || libraryStandardWarmInFlight) return;
+  libraryStandardWarmTimer = window.setTimeout(() => {
+    libraryStandardWarmTimer = 0;
+    void runLibraryStandardThumbWarmTick();
+  }, delay);
+}
+
+function nextLibraryStandardWarmBatch() {
+  const batch = [];
+  while (
+    libraryStandardWarmCursor < libraryStandardWarmPlan.length &&
+    batch.length < LIBRARY_STANDARD_WARM_BATCH
+  ) {
+    const entry = libraryStandardWarmPlan[libraryStandardWarmCursor];
+    libraryStandardWarmCursor += 1;
+    if (!entry || thumbPrefetchWarmed.has(entry.key)) continue;
+    batch.push(entry);
+  }
+  return batch;
+}
+
+async function runLibraryStandardThumbWarmTick() {
+  if (!libraryStandardWarmPlan.length) return;
+  if (!libraryStandardWarmReady()) {
+    scheduleLibraryStandardThumbWarm(LIBRARY_STANDARD_WARM_IDLE_MS);
+    return;
+  }
+  const startCursor = libraryStandardWarmCursor;
+  const batch = nextLibraryStandardWarmBatch();
+  if (!batch.length) {
+    markLibraryStandardWarmDone(libraryStandardWarmSignature);
+    libraryStandardWarmPlan = [];
+    libraryStandardWarmCursor = 0;
+    return;
+  }
+  const signature = libraryStandardWarmSignature;
+  const generation = libraryStandardWarmGeneration;
+  const controller = new AbortController();
+  const flight = { controller, signature, generation, startCursor };
+  libraryStandardWarmInFlight = flight;
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    LIBRARY_STANDARD_WARM_TIMEOUT_MS,
+  );
+  let failed = false;
+  try {
+    await api("/api/thumbs/prefetch", {
+      method: "POST",
+      body: JSON.stringify({
+        ids: batch.map((entry) => entry.id),
+        size: LIBRARY_STANDARD_THUMB_SIZE,
+        fit: "inside",
+      }),
+      signal: controller.signal,
+    });
+  } catch {
+    failed = true;
+  } finally {
+    window.clearTimeout(timeout);
+    if (libraryStandardWarmInFlight === flight) {
+      libraryStandardWarmInFlight = null;
+    }
+  }
+  if (
+    generation !== libraryStandardWarmGeneration ||
+    signature !== libraryStandardWarmSignature
+  ) {
+    return;
+  }
+  if (failed) {
+    libraryStandardWarmCursor = startCursor;
+    scheduleLibraryStandardThumbWarm(LIBRARY_STANDARD_WARM_IDLE_MS);
+    return;
+  }
+  if (libraryStandardWarmPlan.length) {
+    scheduleLibraryStandardThumbWarm(LIBRARY_STANDARD_WARM_TICK_MS);
+  }
+}
+
+function ensureLibraryStandardThumbWarm({ force = false } = {}) {
+  if (state.activeId !== "library") return false;
+  const items = libraryStandardWarmItems();
+  if (!items.length) {
+    stopLibraryStandardThumbWarm();
+    return false;
+  }
+  const signature = libraryStandardWarmSignatureFor(items);
+  if (!force && libraryStandardWarmMarkedDone(signature)) {
+    libraryStandardWarmSignature = signature;
+    libraryStandardWarmPlan = [];
+    libraryStandardWarmCursor = 0;
+    return true;
+  }
+  if (force || signature !== libraryStandardWarmSignature) {
+    stopLibraryStandardThumbWarm();
+    libraryStandardWarmSignature = signature;
+    libraryStandardWarmPlan = items.map((item) => ({
+      id: Number(item.id),
+      key: thumbPrefetchKeyOf(item, LIBRARY_STANDARD_THUMB_SIZE),
+    }));
+    libraryStandardWarmCursor = 0;
+  }
+  if (
+    libraryStandardWarmCursor < libraryStandardWarmPlan.length &&
+    !libraryStandardWarmTimer &&
+    !libraryStandardWarmInFlight
+  ) {
+    scheduleLibraryStandardThumbWarm(0);
+  }
+  return true;
+}
+
 /* ---------------------- 提前解码 ---------------------- */
 /* 服务端只负责把缩略图写到磁盘上；浏览器这边还得请求一次、解码一次才有画面。
    这两步都能在用户滑到之前做完：确认落盘的那一批直接排进解码队列，
@@ -25009,8 +26427,22 @@ function stopThumbDecodeAhead() {
    否则解出来的 URL 和格子里要的不是同一张，白占内存。 */
 function queueThumbDecodeAhead(items, size) {
   if (!items?.length || size !== galleryThumbSizeForZoom()) return;
+  const range = galleryViewportIndexRange();
+  if (!range) return;
+  const visibleCount = Math.max(1, range.last - range.first + 1);
+  const radius = Math.min(
+    THUMB_DECODE_AHEAD_MAX_RADIUS,
+    Math.max(
+      THUMB_DECODE_AHEAD_MIN_RADIUS,
+      visibleCount * THUMB_DECODE_AHEAD_VIEWPORT_RADIUS,
+    ),
+  );
+  const first = Math.max(0, range.first - radius);
+  const last = Math.min(state.items.length - 1, range.last + radius);
   for (const item of items) {
     if (!item) continue;
+    const index = state.items.indexOf(item);
+    if (index < first || index > last) continue;
     if (thumbDecodeAheadQueue.length >= THUMB_DECODE_AHEAD_LIMIT) break;
     const url = itemThumbUrl(item, size, "inside");
     if (thumbPoolHas(url) || thumbDecodeAheadQueued.has(url)) continue;
@@ -25018,6 +26450,297 @@ function queueThumbDecodeAhead(items, size) {
     thumbDecodeAheadQueue.push(url);
   }
   if (thumbDecodeAheadQueue.length) scheduleThumbDecodeAhead();
+}
+
+/* ---------------------- 全库微型预览预热 ---------------------- */
+/* 标准档细节图需要 400px 才能清晰，但“不出现灰格”只需要几十像素。
+   这里把 48px L0 全库空闲预热并保留已解码节点；高清请求仍然优先，
+   L0 只占独立的小预算，滚到任何位置都能先画出真实照片轮廓。 */
+const THUMB_LOW_RES_WARM_CONCURRENCY = 4;
+const THUMB_LOW_RES_WARM_BUDGET_BYTES = 96 * 1024 * 1024;
+const THUMB_LOW_RES_WARM_MAX_ENTRIES = 20000;
+const THUMB_LOW_RES_WARM_TICK_MS = 90;
+const THUMB_LOW_RES_WARM_SCROLL_DELAY_MS = 160;
+const THUMB_LOW_RES_JUMP_PREVIEW_RADIUS = 36;
+const THUMB_LOW_RES_JUMP_CONCURRENCY = 8;
+const thumbLowResWarmCache = new Map();
+const thumbLowResWarmQueued = new Set();
+const thumbLowResWarmActiveUrls = new Set();
+const thumbLowResWarmQueue = [];
+let thumbLowResWarmActive = 0;
+let thumbLowResWarmBytes = 0;
+let thumbLowResWarmTimer = 0;
+let thumbLowResWarmScheduledUsesIdle = false;
+let thumbLowResWarmViewKey = "";
+
+const thumbLowResUrl = (item) =>
+  itemThumbUrl(item, GALLERY_LOW_RES_THUMB_SIZE, "inside");
+const thumbLowResWarmUrl = (item) => `${thumbLowResUrl(item)}&lane=background`;
+const thumbLowResCanonicalUrl = (url) => {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url, window.location.href);
+    parsed.searchParams.delete("lane");
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return "";
+  }
+};
+
+function thumbLowResWarmWanted() {
+  return Boolean(
+    !document.hidden &&
+    canZoomGallery() &&
+    $("#viewer")?.hidden &&
+    !state.busy &&
+    !rootImportRunning() &&
+    !galleryZoomBusy,
+  );
+}
+
+function trimThumbLowResWarmCache() {
+  while (
+    thumbLowResWarmCache.size &&
+    (thumbLowResWarmBytes > THUMB_LOW_RES_WARM_BUDGET_BYTES ||
+      thumbLowResWarmCache.size > THUMB_LOW_RES_WARM_MAX_ENTRIES)
+  ) {
+    const [url, entry] = thumbLowResWarmCache.entries().next().value;
+    thumbLowResWarmCache.delete(url);
+    thumbLowResWarmBytes = Math.max(
+      0,
+      thumbLowResWarmBytes - (Number(entry?.bytes) || 0),
+    );
+    if (entry?.img) {
+      entry.img.onload = null;
+      entry.img.onerror = null;
+      entry.img.removeAttribute("src");
+    }
+  }
+}
+
+function thumbLowResKeep(url, img) {
+  if (
+    !url ||
+    url.startsWith("data:") ||
+    !(img?.naturalWidth > 0 && img?.naturalHeight > 0)
+  ) {
+    return false;
+  }
+  const bytes = img.naturalWidth * img.naturalHeight * 4;
+  const previous = thumbLowResWarmCache.get(url);
+  if (previous) {
+    thumbLowResWarmBytes -= Number(previous.bytes) || 0;
+    if (previous.img !== img) {
+      previous.img.onload = null;
+      previous.img.onerror = null;
+      previous.img.removeAttribute("src");
+    }
+  }
+  thumbLowResWarmCache.delete(url);
+  thumbLowResWarmCache.set(url, { img, bytes });
+  thumbLowResWarmBytes += bytes;
+  trimThumbLowResWarmCache();
+  return thumbLowResWarmCache.has(url);
+}
+
+function thumbLowResTake(url) {
+  const entry = thumbLowResWarmCache.get(url);
+  if (!entry?.img) return null;
+  thumbLowResWarmCache.delete(url);
+  thumbLowResWarmBytes = Math.max(
+    0,
+    thumbLowResWarmBytes - (Number(entry.bytes) || 0),
+  );
+  return entry.img;
+}
+
+function donateThumbLowResImage(tile) {
+  const img = tile?.querySelector?.("img.gallery-thumb-l0");
+  if (!img?.complete || !img.naturalWidth) return;
+  const url = thumbLowResCanonicalUrl(thumbImageKey(img));
+  if (!url || url.startsWith("data:")) return;
+  const item = state.items[Number(tile?.dataset?.index)];
+  if (item && url !== thumbLowResUrl(item)) return;
+  img.remove();
+  thumbLowResKeep(url, img);
+}
+
+function adoptThumbLowResImage(tile) {
+  const placeholder = tile?.querySelector?.("img.gallery-thumb-l0");
+  if (!placeholder) return null;
+  const img = thumbLowResTake(
+    thumbImageKey(placeholder) || placeholder.dataset.galleryLowResSrc || "",
+  );
+  if (!img) return null;
+  img.className = "gallery-thumb-l0";
+  img.alt = "";
+  img.setAttribute("aria-hidden", "true");
+  img.draggable = false;
+  img.loading = "eager";
+  img.decoding = "async";
+  img.fetchPriority = "high";
+  img.dataset.galleryLowResSrc =
+    placeholder.dataset.galleryLowResSrc || thumbImageKey(placeholder);
+  img.onload = () => handleGalleryLowResLoad(img);
+  img.onerror = () => handleGalleryLowResError(img);
+  placeholder.replaceWith(img);
+  tile.classList.add("has-thumb-l0");
+  return img;
+}
+
+function scheduleThumbLowResWarm(delay = THUMB_LOW_RES_WARM_TICK_MS) {
+  if (thumbLowResWarmTimer) return;
+  const run = () => {
+    thumbLowResWarmTimer = 0;
+    pumpThumbLowResWarm();
+  };
+  if (typeof requestIdleCallback === "function") {
+    thumbLowResWarmScheduledUsesIdle = true;
+    thumbLowResWarmTimer = requestIdleCallback(run, {
+      timeout: Math.max(delay, 400),
+    });
+  } else {
+    thumbLowResWarmScheduledUsesIdle = false;
+    thumbLowResWarmTimer = window.setTimeout(run, delay);
+  }
+}
+
+function startThumbLowResWarm({ cacheUrl, requestUrl, urgent = false }) {
+  thumbLowResWarmActive += 1;
+  thumbLowResWarmActiveUrls.add(cacheUrl);
+  const img = new Image();
+  img.decoding = "async";
+  img.fetchPriority = urgent ? "high" : "low";
+  const finish = () => {
+    thumbLowResWarmQueued.delete(cacheUrl);
+    thumbLowResWarmActiveUrls.delete(cacheUrl);
+    thumbLowResWarmActive = Math.max(0, thumbLowResWarmActive - 1);
+    pumpThumbLowResWarm({ urgent });
+  };
+  img.onload = () => {
+    const decoded =
+      typeof img.decode === "function"
+        ? img.decode().catch(() => {})
+        : Promise.resolve();
+    decoded.then(() => {
+      if (!(img.naturalWidth > 0 && img.naturalHeight > 0)) {
+        finish();
+        return;
+      }
+      thumbLowResKeep(cacheUrl, img);
+      finish();
+    });
+  };
+  img.onerror = finish;
+  img.src = requestUrl;
+}
+
+function pumpThumbLowResWarm({ urgent = false } = {}) {
+  if (!thumbLowResWarmQueue.length) return;
+  if (!thumbLowResWarmWanted()) {
+    scheduleThumbLowResWarm(THUMB_PREFETCH_IDLE_MS);
+    return;
+  }
+  if (
+    !urgent &&
+    document.documentElement.classList.contains("gallery-is-scrolling")
+  ) {
+    scheduleThumbLowResWarm(THUMB_LOW_RES_WARM_SCROLL_DELAY_MS);
+    return;
+  }
+  const concurrency = urgent
+    ? THUMB_LOW_RES_JUMP_CONCURRENCY
+    : THUMB_LOW_RES_WARM_CONCURRENCY;
+  while (thumbLowResWarmActive < concurrency && thumbLowResWarmQueue.length) {
+    const at = urgent ? thumbLowResWarmQueue.findIndex((job) => job.urgent) : 0;
+    if (at < 0) break;
+    startThumbLowResWarm(thumbLowResWarmQueue.splice(at, 1)[0]);
+  }
+  if (thumbLowResWarmQueue.length) scheduleThumbLowResWarm();
+}
+
+/* 拖动时间轴时，目标位置在松手前就已经确定。先把它附近的一小段 48px
+   预览作为前台任务起跑，等虚拟网格真正跳到那里时，浏览器直接合并/命中请求。 */
+function primeThumbLowResAtRatio(ratio) {
+  if (!state.items.length) return;
+  const center = Math.min(
+    state.items.length - 1,
+    Math.max(0, Math.round(ratio * (state.items.length - 1))),
+  );
+  const first = Math.max(0, center - THUMB_LOW_RES_JUMP_PREVIEW_RADIUS);
+  const last = Math.min(
+    state.items.length - 1,
+    center + THUMB_LOW_RES_JUMP_PREVIEW_RADIUS,
+  );
+  /* 一页图集只有一次请求，却能在首帧同时铺满 64 格。先把目标页提到
+     前台，逐张 48px 请求继续作为图集尚未返回时的兜底。 */
+  void preloadGalleryAtlasPagesForItems(state.items.slice(first, last + 1));
+  const jobs = [];
+  for (let index = first; index <= last; index += 1) {
+    const item = state.items[index];
+    if (!item) continue;
+    const cacheUrl = thumbLowResUrl(item);
+    if (
+      thumbLowResWarmCache.has(cacheUrl) ||
+      thumbLowResWarmActiveUrls.has(cacheUrl)
+    ) {
+      continue;
+    }
+    jobs.push({ cacheUrl, requestUrl: cacheUrl, urgent: true });
+  }
+  if (!jobs.length) return;
+  const urls = new Set(jobs.map((job) => job.cacheUrl));
+  for (let index = thumbLowResWarmQueue.length - 1; index >= 0; index -= 1) {
+    const queued = thumbLowResWarmQueue[index];
+    if (!queued.urgent && !urls.has(queued.cacheUrl)) continue;
+    if (queued.urgent) thumbLowResWarmQueued.delete(queued.cacheUrl);
+    thumbLowResWarmQueue.splice(index, 1);
+  }
+  for (const job of jobs) {
+    thumbLowResWarmQueued.add(job.cacheUrl);
+  }
+  thumbLowResWarmQueue.unshift(...jobs);
+  pumpThumbLowResWarm({ urgent: true });
+}
+
+function queueThumbLowResWarm(items = state.items) {
+  if (!items?.length) return;
+  const viewKey = thumbPrefetchViewKeyFor(GALLERY_LOW_RES_THUMB_SIZE);
+  if (viewKey !== thumbLowResWarmViewKey) {
+    thumbLowResWarmViewKey = viewKey;
+    thumbLowResWarmQueue.length = 0;
+    thumbLowResWarmQueued.clear();
+    resetGalleryAtlasPages();
+  }
+  const range = galleryViewportIndexRange();
+  const enqueue = (item) => {
+    if (!item) return;
+    const cacheUrl = thumbLowResUrl(item);
+    if (
+      thumbLowResWarmCache.has(cacheUrl) ||
+      thumbLowResWarmQueued.has(cacheUrl)
+    ) {
+      return;
+    }
+    thumbLowResWarmQueued.add(cacheUrl);
+    thumbLowResWarmQueue.push({
+      cacheUrl,
+      requestUrl: thumbLowResWarmUrl(item),
+    });
+  };
+  /* 单张 L0 只补当前视野和短回退区；全库由小型图集页在空闲时铺满。 */
+  if (range) {
+    const first = Math.max(0, range.first - GALLERY_LOW_RES_FALLBACK_SPAN);
+    const last = Math.min(
+      items.length - 1,
+      range.last + GALLERY_LOW_RES_FALLBACK_SPAN,
+    );
+    for (let index = first; index <= last; index += 1) {
+      enqueue(items[index]);
+    }
+  }
+  if (thumbLowResWarmQueue.length) scheduleThumbLowResWarm(0);
+  queueGalleryAtlasWarm(items);
 }
 
 function startThumbDecodeAhead(url) {
@@ -25088,8 +26811,9 @@ function scheduleThumbPrefetch(delay = THUMB_PREFETCH_TICK_MS) {
   }, delay);
 }
 
-/* 视野挪了以后重新瞄准：小挪动接着按原计划补，大跳动直接换一批目标。 */
-function retargetThumbPrefetch() {
+/* 视野挪了以后重新瞄准：小挪动接着按原计划补，大跳动直接换一批目标。
+   scrollend 后传 settled=true：不再空等一轮「视野稳定」，而是立刻服务最终位置。 */
+function retargetThumbPrefetch({ settled = false } = {}) {
   const size = galleryThumbSizeForZoom();
   const key = thumbPrefetchViewKeyFor(size);
   if (!key) return;
@@ -25101,7 +26825,12 @@ function retargetThumbPrefetch() {
       : Math.abs(range.first - thumbPrefetchAnchor);
   if (moved >= THUMB_PREFETCH_JUMP_MIN) {
     cancelThumbPrefetchBatch();
-    thumbPrefetchSettleUntil = Date.now() + THUMB_PREFETCH_SETTLE_MS;
+    /* 拖动过程中排进解码队列的中间位置已经没用了。
+       清掉队列，把下面的解码名额留给最终停下来的视野。 */
+    stopThumbDecodeAhead();
+    thumbPrefetchSettleUntil = settled
+      ? 0
+      : Date.now() + THUMB_PREFETCH_SETTLE_MS;
   }
   if (
     key !== thumbPrefetchViewKey ||
@@ -25110,6 +26839,7 @@ function retargetThumbPrefetch() {
   ) {
     rebuildThumbPrefetchPlan(range, size);
   }
+  if (settled) thumbPrefetchScrollDirty = false;
 }
 
 async function runThumbPrefetchTick() {
@@ -25206,6 +26936,7 @@ function armThumbPrefetch({ force = false } = {}) {
     if (range) rebuildThumbPrefetchPlan(range, size);
     else resetThumbPrefetchPlan(size);
   }
+  rememberThumbDecodeViewport();
   if (!thumbPrefetchTimer) scheduleThumbPrefetch(THUMB_PREFETCH_TICK_MS);
 }
 
@@ -25216,92 +26947,76 @@ document.addEventListener("visibilitychange", () => {
     thumbPrefetchTimer = 0;
     cancelThumbPrefetchBatch();
     stopThumbDecodeAhead();
+    stopLibraryStandardThumbWarm({ clearPlan: false });
+    if (galleryAtlasWarmTimer) window.clearTimeout(galleryAtlasWarmTimer);
+    galleryAtlasWarmTimer = 0;
     /* 没人看的时候把离屏解码池收到四分之一，内存先还给系统；
        回到前台边滚边重新攒起来，攒的过程用户是感觉不到的。 */
     thumbTrimDecodePool(Math.floor(THUMB_DECODE_POOL_BUDGET / 4));
     return;
   }
   armThumbPrefetch({ force: true });
+  queueThumbLowResWarm();
+  queueGalleryAtlasWarm();
+  ensureLibraryStandardThumbWarm();
+  scheduleThumbLowResWarm(0);
+  scheduleGalleryAtlasWarm(0);
 });
 
 function galleryQualitySrc(item, level = state.photoZoom) {
-  if (!item || level < GALLERY_HIGH_RES_MIN) return "";
-  return itemThumbUrl(item, GALLERY_HIGH_RES_SIZE, "inside");
+  if (!item || level < GALLERY_DETAIL_MIN) return "";
+  return itemThumbUrl(item, GALLERY_GRID_DETAIL_SIZE, "inside");
 }
 
 function loadGalleryDetailedImage(tile) {
-  if (state.photoZoom < GALLERY_HIGH_RES_MIN || !tile.isConnected) return;
-  const img = tile.querySelector("img");
+  if (state.photoZoom < GALLERY_DETAIL_MIN || !tile.isConnected) return;
+  const baseImg = tile.querySelector(
+    ".crop > img:not(.gallery-full-overlay):not(.gallery-thumb-l0)",
+  );
   const item = state.items[Number(tile.dataset.index)];
-  if (!img || !item) return;
+  if (!baseImg || !item) return;
   const detailSrc = galleryQualitySrc(item);
-  if (!detailSrc || img.dataset.galleryQualitySrc === detailSrc) return;
-  if (!img.dataset.thumbSrc) {
-    img.dataset.thumbSrc = img.getAttribute("src") || "";
+  const crop = tile.querySelector(".crop");
+  if (!detailSrc || !crop) return;
+  const existing = tile.querySelector(".gallery-full-overlay");
+  if (existing?.dataset.galleryQualitySrc === detailSrc) {
+    existing.style.opacity = "1";
+    return;
   }
-  img.dataset.galleryQualitySrc = detailSrc;
+  existing?.remove();
   const stillWanted = () => {
     if (!tile.isConnected) return false;
     const currentItem = state.items[Number(tile.dataset.index)];
     return !!currentItem && galleryQualitySrc(currentItem) === detailSrc;
   };
-  /* 先让轻量缩略图继续顶着，高清图解码完再淡入，避免黑一下或闪空。 */
-  const preload = new Image();
-  preload.decoding = "async";
-  const apply = () => {
-    if (!stillWanted()) return;
-    const crop = tile.querySelector(".crop") || tile.querySelector(".shot");
-    if (!crop) {
-      img.src = detailSrc;
-      img.loading = "eager";
+  /* 底层始终保留同一张网格图，细节层只叠加、不替换 src。
+     即使细节图还在解码，用户看到的也是完整照片，而不是灰块。 */
+  const reveal = () => {
+    if (!stillWanted()) {
+      overlay.remove();
       return;
     }
-    const old = tile.querySelector(".gallery-full-overlay");
-    if (old) old.remove();
-    const overlay = document.createElement("img");
-    overlay.className = "gallery-full-overlay";
-    overlay.alt = "";
-    overlay.draggable = false;
-    overlay.addEventListener(
-      "load",
-      () => {
-        if (!stillWanted()) {
-          overlay.remove();
-          return;
-        }
-        requestAnimationFrame(() => {
-          overlay.style.opacity = "1";
-        });
-        setTimeout(() => {
-          if (!stillWanted()) {
-            overlay.remove();
-            return;
-          }
-          img.src = detailSrc;
-          img.loading = "eager";
-          overlay.remove();
-        }, 180);
-      },
-      { once: true },
-    );
-    overlay.src = detailSrc;
-    crop.append(overlay);
+    overlay.style.opacity = "1";
   };
-  if (preload.complete && preload.naturalWidth) apply();
-  else preload.addEventListener("load", apply, { once: true });
-  preload.addEventListener(
+  const overlay = document.createElement("img");
+  overlay.className = "gallery-full-overlay";
+  overlay.alt = "";
+  overlay.draggable = false;
+  overlay.loading = "eager";
+  overlay.decoding = "async";
+  overlay.fetchPriority = "high";
+  overlay.dataset.galleryQualitySrc = detailSrc;
+  overlay.addEventListener("load", reveal, { once: true });
+  overlay.addEventListener(
     "error",
     () => {
-      if (
-        img.dataset.galleryQualitySrc === detailSrc &&
-        img.getAttribute("src") !== detailSrc
-      ) {
-        delete img.dataset.galleryQualitySrc;
-      }
+      overlay.remove();
     },
     { once: true },
   );
-  preload.src = detailSrc;
+  overlay.src = detailSrc;
+  crop.append(overlay);
+  if (overlay.complete && overlay.naturalWidth > 0) reveal();
 }
 
 function setGalleryImageQuality(grid, level = state.photoZoom) {
@@ -25312,11 +27027,12 @@ function setGalleryImageQuality(grid, level = state.photoZoom) {
     galleryFullObserver.disconnect();
     galleryFullObserver = null;
   }
-  for (const target of grids) restoreGalleryImageQuality(target);
+  for (const target of grids) restoreGalleryImageQuality(target, level);
   observeGalleryImageTiles(grids);
+  if (grids.length) scheduleVisibleGalleryImageSweep(grids);
   /* 换网格档位 = 换一档缩略图尺寸，预生成计划要跟着重排。 */
   armThumbPrefetch();
-  if (!grids.length || level < GALLERY_HIGH_RES_MIN) {
+  if (!grids.length || level < GALLERY_DETAIL_MIN) {
     return;
   }
   if (typeof IntersectionObserver === "undefined") {
@@ -25353,6 +27069,9 @@ function applyGalleryZoomClasses(
   rebaseRenderedContentViewZoom(level);
   const grids = grid ? [grid] : photoLayoutGrids();
   if (!grids.length) return;
+  /* 换档时真实网格在旧画面快照下面完成重排。旧格子和新补格子必须在
+     同一帧落到目标尺寸，不能让两者分别播放不同的裁切过渡。 */
+  setPhotoGridLayoutInstant(true);
   for (const target of grids) {
     for (let n = GALLERY_ZOOM_MIN; n <= GALLERY_ZOOM_MAX; n += 1) {
       target.classList.toggle(`gallery-zoom-${n}`, n === level);
@@ -25442,6 +27161,7 @@ function galleryZoomFocusFromEvent(event, { anchorItem = false } = {}) {
       ? event.target.closest(".tile[data-index]")
       : null;
   if (!bestTile || !targetGrid.contains(bestTile)) bestTile = null;
+  const tileHit = Boolean(bestTile);
   let bestDistance = Infinity;
   for (const tile of bestTile
     ? []
@@ -25471,6 +27191,7 @@ function galleryZoomFocusFromEvent(event, { anchorItem = false } = {}) {
     itemId: bestTile
       ? (state.items[Number(bestTile.dataset.index)]?.id ?? null)
       : null,
+    tileHit,
     tileY:
       tileRect && tileRect.height > 0
         ? Math.max(
@@ -25503,6 +27224,7 @@ function galleryZoomFocusFromTile(tile) {
     ),
     index: Number(tile.dataset.index),
     itemId: state.items[Number(tile.dataset.index)]?.id ?? null,
+    tileHit: true,
     tileY: 0.5,
   };
 }
@@ -25627,6 +27349,18 @@ function cancelGalleryZoomMotion() {
   galleryZoomTarget = state.photoZoom;
   galleryZoomPending = 0;
   galleryZoomBusy = false;
+  clearTimeout(galleryWheelSettleTimer);
+  clearTimeout(galleryWheelCommitTimer);
+  clearTimeout(galleryWheelMouseUnlockTimer);
+  galleryWheelSettleTimer = 0;
+  galleryWheelCommitTimer = 0;
+  galleryWheelMouseUnlockTimer = 0;
+  galleryWheelMouseLocked = false;
+  galleryWheelMouseDirection = 0;
+  galleryWheelMouseLastAt = 0;
+  galleryWheelPreviewLog = 0;
+  cancelGalleryZoomCrossfade();
+  clearGalleryWheelZoomPreview();
   syncGalleryGridInteractionState();
   cancelGalleryRubberBand();
   cancelGalleryLayoutPulse();
@@ -25647,12 +27381,6 @@ async function animateGalleryZoomTo(level) {
     return;
   }
   const content = $("#content");
-  const dense = grids.some(
-    (grid) =>
-      grid.querySelectorAll(":scope > .tile[data-index]").length >
-      GALLERY_FLIP_TILE_LIMIT,
-  );
-  const snapshots = dense ? null : galleryVisibleSnapshots();
   const focus = galleryZoomFocus();
   /* 窗口化网格只渲染视口附近的格子。滚轮的区域缩放无命中项目时，
      先在旧布局里记下指针下方的格子，重排后按同一格子定位，
@@ -25688,12 +27416,13 @@ async function animateGalleryZoomTo(level) {
       break;
     }
   }
-  const fromLevel = state.photoZoom;
   const before = {
     scrollTop: content.scrollTop,
   };
+  const fromLevel = state.photoZoom;
   const labelsChanged =
     fromLevel < GALLERY_STANDARD_ZOOM !== level < GALLERY_STANDARD_ZOOM;
+  const crossfade = beginGalleryZoomCrossfade(focus);
 
   state.photoZoom = level;
   applyGalleryZoomClasses(null, level, {
@@ -25705,14 +27434,7 @@ async function animateGalleryZoomTo(level) {
   syncVirtualPhotoGridWindowNow();
   if (labelsChanged) scheduleGalleryLabelRefresh();
 
-  const reducedMotion = window.matchMedia(
-    "(prefers-reduced-motion: reduce)",
-  ).matches;
-  if (!reducedMotion) {
-    if (dense) animateGalleryLayoutPulse(grids, focus);
-    else animateGalleryFlip(snapshots);
-    await new Promise((resolve) => setTimeout(resolve, GALLERY_ZOOM_MS));
-  }
+  await playGalleryZoomCrossfade(crossfade, fromLevel, level);
   await new Promise((resolve) => requestAnimationFrame(resolve));
   if (seq === galleryZoomSeq && galleryZoomTarget === level) {
     const syncQuality = () => {
@@ -25754,7 +27476,29 @@ async function drainGalleryZoom() {
 
 function requestGalleryZoom(dir, focus = null) {
   if (!dir) return;
-  if (focus) galleryZoomFocusPoint = focus;
+  if (focus) {
+    const previous = galleryZoomFocusPoint;
+    const now = performance.now();
+    const continuing =
+      galleryZoomBusy ||
+      galleryZoomPending !== 0 ||
+      (previous &&
+        now - (Number(previous.at) || 0) < GALLERY_ZOOM_ANCHOR_HOLD_MS);
+    const pointerStayed =
+      previous &&
+      Number.isFinite(previous.x) &&
+      Number.isFinite(previous.y) &&
+      Math.hypot(focus.x - previous.x, focus.y - previous.y) < 24;
+    /* 动画中会暂时关闭格子命中。连续手势拿不到具体格子时沿用最初
+       指针下的照片，避免每一档都重新选择附近格子造成锚点漂移。 */
+    if (continuing && pointerStayed && previous.index != null) {
+      focus.index = previous.index;
+      focus.itemId = previous.itemId;
+      focus.tileY = previous.tileY;
+    }
+    focus.at = now;
+    galleryZoomFocusPoint = focus;
+  }
   const base = clampGalleryZoom(galleryZoomTarget);
   const next = clampGalleryZoom(base + Math.sign(dir));
   if (next === base) {
@@ -25814,6 +27558,398 @@ function rubberBandGalleryZoom(dir) {
   }
 }
 
+const GALLERY_WHEEL_PREVIEW_SENSITIVITY = 0.007;
+const GALLERY_WHEEL_PREVIEW_EASE = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+const GALLERY_WHEEL_MOUSE_LOCK_MS = 140;
+const GALLERY_ZOOM_ANCHOR_HOLD_MS = 700;
+
+function scheduleGalleryWheelMouseUnlock() {
+  clearTimeout(galleryWheelMouseUnlockTimer);
+  galleryWheelMouseUnlockTimer = window.setTimeout(() => {
+    galleryWheelMouseUnlockTimer = 0;
+    if (
+      performance.now() - galleryWheelMouseLastAt >=
+      GALLERY_WHEEL_MOUSE_LOCK_MS
+    ) {
+      galleryWheelMouseLocked = false;
+      galleryWheelMouseDirection = 0;
+    }
+  }, GALLERY_WHEEL_MOUSE_LOCK_MS);
+}
+
+function galleryWheelPreviewTargetHosts() {
+  const timeline = $("#content .library-timeline-groups");
+  if (timeline) return [timeline];
+  return photoLayoutGrids();
+}
+
+function galleryWheelNearestLevel(scale) {
+  let best = galleryWheelPreviewBaseLevel;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let level = GALLERY_ZOOM_MIN; level <= GALLERY_ZOOM_MAX; level += 1) {
+    const distance = Math.abs(GALLERY_LEVEL_SCALE[level] - scale);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = level;
+    }
+  }
+  return best;
+}
+
+function galleryWheelAbsoluteScale() {
+  const baseScale =
+    GALLERY_LEVEL_SCALE[clampGalleryZoom(galleryWheelPreviewBaseLevel)];
+  return baseScale * Math.exp(galleryWheelPreviewLog);
+}
+
+function cancelGalleryZoomCrossfade(motion = galleryZoomCrossfadeMotion) {
+  if (!motion) return;
+  if (galleryZoomCrossfadeMotion === motion) {
+    galleryZoomCrossfadeMotion = null;
+  }
+  for (const animation of motion.animations) {
+    try {
+      animation.cancel();
+    } catch {}
+  }
+  for (const target of motion.targets) {
+    if (!target.host?.isConnected) continue;
+    target.host.style.transformOrigin = target.origin;
+    target.host.style.willChange = target.willChange;
+  }
+  motion.snapshot?.remove();
+}
+
+/* 手势停下时先冻结当前画面，再在同一任务里把真实 DOM 换成目标档位。
+   旧层与新层各自围绕同一鼠标锚点做一次相反起点的同向缩放，最后交叉
+   到同一个视觉尺寸；浏览器只需要合成 transform / opacity 两条属性。 */
+function beginGalleryZoomCrossfade(focus) {
+  cancelGalleryZoomCrossfade();
+  const content = $("#content");
+  const main = content?.closest(".main");
+  if (!content?.firstElementChild || !main) return null;
+  const contentRect = content.getBoundingClientRect();
+  const mainRect = main.getBoundingClientRect();
+  const computed = getComputedStyle(content);
+  const stage = cloneContentSnapshot(content);
+  const snapshot = document.createElement("div");
+  snapshot.className = "gallery-zoom-crossfade-snapshot";
+  snapshot.setAttribute("aria-hidden", "true");
+  snapshot.inert = true;
+  snapshot.style.position = "absolute";
+  snapshot.style.left = `${contentRect.left - mainRect.left}px`;
+  snapshot.style.top = `${contentRect.top - mainRect.top}px`;
+  snapshot.style.width = `${contentRect.width}px`;
+  snapshot.style.height = `${contentRect.height}px`;
+  snapshot.style.zIndex = "18";
+  snapshot.style.overflow = "hidden";
+  snapshot.style.pointerEvents = "none";
+  snapshot.style.contain = "layout paint style";
+  snapshot.style.opacity = "1";
+  snapshot.style.willChange = "opacity";
+  stage.style.position = "absolute";
+  stage.style.inset = "0";
+  stage.style.width = "100%";
+  stage.style.height = "100%";
+  stage.style.padding = computed.padding;
+  stage.style.transform = "none";
+  stage.style.viewTransitionName = "none";
+  stage.style.contain = "layout paint style";
+  stage.style.willChange = "transform";
+  const originX = focus ? focus.x : content.clientWidth / 2;
+  const originY = focus ? focus.y : content.clientHeight / 2;
+  stage.style.transformOrigin = `${originX.toFixed(2)}px ${originY.toFixed(
+    2,
+  )}px`;
+  snapshot.append(stage);
+  main.append(snapshot);
+  stage.scrollTop = content.scrollTop;
+  stage.scrollLeft = content.scrollLeft;
+  const motion = {
+    snapshot,
+    stage,
+    animations: [],
+    targets: [],
+    started: false,
+    focus,
+  };
+  galleryZoomCrossfadeMotion = motion;
+  return motion;
+}
+
+function playGalleryZoomCrossfade(
+  motion,
+  fromLevel,
+  toLevel,
+  previewScale = 1,
+) {
+  if (
+    !motion ||
+    galleryZoomCrossfadeMotion !== motion ||
+    !motion.snapshot?.isConnected
+  ) {
+    if (motion) cancelGalleryZoomCrossfade(motion);
+    return Promise.resolve();
+  }
+  const content = $("#content");
+  if (!content) {
+    cancelGalleryZoomCrossfade(motion);
+    return Promise.resolve();
+  }
+  const reducedMotion = window.matchMedia(
+    "(prefers-reduced-motion: reduce)",
+  ).matches;
+  const fromScale = GALLERY_LEVEL_SCALE[clampGalleryZoom(fromLevel)] || 1;
+  const toScale = GALLERY_LEVEL_SCALE[clampGalleryZoom(toLevel)] || 1;
+  const relativeScale = Math.max(0.001, toScale / fromScale);
+  const visualScale =
+    Number.isFinite(previewScale) && previewScale > 0 ? previewScale : 1;
+  const outgoingEndScale = relativeScale / visualScale;
+  const incomingStartScale = visualScale / relativeScale;
+  const contentRect = content.getBoundingClientRect();
+  const snapshots = [motion.snapshot];
+  const outgoingFrames = reducedMotion
+    ? [{ opacity: 1 }, { opacity: 0 }]
+    : [
+        { opacity: 1, offset: 0 },
+        { opacity: 1, offset: 0.58 },
+        {
+          opacity: 0,
+          offset: 1,
+        },
+      ];
+  const duration = reducedMotion ? GALLERY_ZOOM_REDUCED_MS : GALLERY_ZOOM_MS;
+  snapshots.push(
+    motion.snapshot.animate(outgoingFrames, {
+      duration,
+      easing: PHOTO_GRID_FLIP_EASE,
+      fill: "both",
+    }),
+  );
+  if (!reducedMotion && motion.stage) {
+    snapshots.push(
+      motion.stage.animate(
+        [
+          { transform: "scale(1)" },
+          { transform: `scale(${outgoingEndScale.toFixed(6)})` },
+        ],
+        {
+          duration,
+          easing: PHOTO_GRID_FLIP_EASE,
+          fill: "both",
+        },
+      ),
+    );
+  }
+
+  const targets = galleryWheelPreviewTargetHosts();
+  for (const host of targets) {
+    if (!host?.isConnected) continue;
+    const rect = host.getBoundingClientRect();
+    const originX = `${
+      Number.isFinite(motion.focus?.x)
+        ? motion.focus.x + contentRect.left - rect.left
+        : rect.width / 2
+    }px`;
+    const originY = `${
+      Number.isFinite(motion.focus?.y)
+        ? motion.focus.y + contentRect.top - rect.top
+        : rect.height / 2
+    }px`;
+    const target = {
+      host,
+      origin: host.style.transformOrigin,
+      willChange: host.style.willChange,
+    };
+    motion.targets.push(target);
+    host.style.transformOrigin = `${originX} ${originY}`;
+    host.style.willChange = "transform, opacity";
+    const incomingMidScale = 1 + (incomingStartScale - 1) * 0.42;
+    const incomingFrames = reducedMotion
+      ? [{ opacity: 0 }, { opacity: 1 }]
+      : [
+          {
+            opacity: 0,
+            transform: `scale(${incomingStartScale.toFixed(6)})`,
+            offset: 0,
+          },
+          {
+            opacity: 0,
+            transform: `scale(${incomingMidScale.toFixed(6)})`,
+            offset: 0.48,
+          },
+          { opacity: 1, transform: "scale(1)", offset: 1 },
+        ];
+    snapshots.push(
+      host.animate(incomingFrames, {
+        duration,
+        easing: PHOTO_GRID_FLIP_EASE,
+        fill: "both",
+      }),
+    );
+  }
+  motion.animations = snapshots;
+  motion.started = true;
+  return Promise.allSettled(
+    snapshots.map((animation) => animation.finished),
+  ).then(() => {
+    if (galleryZoomCrossfadeMotion === motion) {
+      cancelGalleryZoomCrossfade(motion);
+    }
+  });
+}
+
+function clearGalleryWheelZoomPreview() {
+  const entries = galleryWheelPreviewHosts;
+  galleryWheelPreviewHosts = [];
+  galleryWheelPreviewActive = false;
+  document.documentElement.classList.remove("gallery-wheel-zooming");
+  for (const entry of entries) {
+    entry.host.style.transition = "none";
+    entry.host.style.transform = entry.transform;
+    entry.host.style.transformOrigin = entry.origin;
+    entry.host.style.willChange = entry.willChange;
+  }
+  if (entries.length) {
+    requestAnimationFrame(() => {
+      for (const entry of entries) {
+        entry.host.style.transition = entry.transition;
+        entry.host.style.willChange = entry.willChange;
+      }
+    });
+  }
+}
+
+function beginGalleryWheelZoomPreview(focus) {
+  if (galleryWheelPreviewActive) return;
+  const content = $("#content");
+  if (!content) return;
+  const contentRect = content.getBoundingClientRect();
+  const hosts = galleryWheelPreviewTargetHosts();
+  galleryWheelPreviewActive = true;
+  galleryWheelPreviewHosts = hosts.map((host) => {
+    const rect = host.getBoundingClientRect();
+    const originX = focus
+      ? focus.x + contentRect.left - rect.left
+      : rect.width / 2;
+    const originY = focus
+      ? focus.y + contentRect.top - rect.top
+      : rect.height / 2;
+    return {
+      host,
+      origin: `${originX.toFixed(2)}px ${originY.toFixed(2)}px`,
+      transition: host.style.transition,
+      transform: host.style.transform,
+      willChange: host.style.willChange,
+    };
+  });
+  document.documentElement.classList.add("gallery-wheel-zooming");
+  for (const entry of galleryWheelPreviewHosts) {
+    entry.host.style.transformOrigin = entry.origin;
+    entry.host.style.willChange = "transform";
+    entry.host.style.transition = `transform 48ms linear`;
+  }
+}
+
+function applyGalleryWheelZoomPreview(scale, { snap = false } = {}) {
+  if (!galleryWheelPreviewActive) return;
+  for (const entry of galleryWheelPreviewHosts) {
+    entry.host.style.transition = snap
+      ? `transform 72ms ${GALLERY_WHEEL_PREVIEW_EASE}`
+      : "transform 48ms linear";
+    entry.host.style.transform = `scale(${scale.toFixed(5)})`;
+  }
+}
+
+function updateGalleryWheelZoomPreview(event, focus) {
+  if (!galleryWheelPreviewActive) {
+    galleryWheelPreviewBaseLevel = state.photoZoom;
+    galleryWheelPreviewLog = 0;
+    galleryWheelPreviewFocus = focus;
+    beginGalleryWheelZoomPreview(focus);
+  }
+  const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? 400 : 1;
+  const sensitivity = GALLERY_WHEEL_PREVIEW_SENSITIVITY * 1.7;
+  galleryWheelPreviewLog += -event.deltaY * unit * sensitivity;
+  const baseScale =
+    GALLERY_LEVEL_SCALE[clampGalleryZoom(galleryWheelPreviewBaseLevel)];
+  const minScale = GALLERY_LEVEL_SCALE[GALLERY_ZOOM_MIN] / baseScale;
+  const maxScale = GALLERY_LEVEL_SCALE[GALLERY_ZOOM_MAX] / baseScale;
+  const minLog = Math.log(minScale);
+  const maxLog = Math.log(maxScale);
+  galleryWheelPreviewLog = Math.max(
+    minLog,
+    Math.min(maxLog, galleryWheelPreviewLog),
+  );
+  const visualScale = Math.exp(galleryWheelPreviewLog);
+  const target = galleryWheelNearestLevel(baseScale * visualScale);
+  galleryZoomTarget = target;
+  galleryZoomPending = 0;
+  applyGalleryWheelZoomPreview(visualScale);
+  scheduleGalleryWheelZoomCommit();
+}
+
+function scheduleGalleryWheelZoomCommit() {
+  clearTimeout(galleryWheelSettleTimer);
+  clearTimeout(galleryWheelCommitTimer);
+  galleryWheelSettleTimer = window.setTimeout(() => {
+    galleryWheelSettleTimer = 0;
+    if (!galleryWheelPreviewActive) return;
+    void commitGalleryWheelZoom();
+  }, GALLERY_WHEEL_GESTURE_IDLE_MS);
+}
+
+async function commitGalleryWheelZoom() {
+  if (!galleryWheelPreviewActive) return;
+  const content = $("#content");
+  const fromLevel = state.photoZoom;
+  const toLevel = galleryWheelNearestLevel(galleryWheelAbsoluteScale());
+  const focus = galleryWheelPreviewFocus;
+  if (!content || toLevel === fromLevel) {
+    galleryZoomTarget = fromLevel;
+    applyGalleryWheelZoomPreview(1, { snap: true });
+    galleryWheelCommitTimer = window.setTimeout(() => {
+      galleryWheelCommitTimer = 0;
+      if (!galleryWheelPreviewActive) return;
+      clearGalleryWheelZoomPreview();
+      galleryWheelPreviewLog = 0;
+      galleryWheelPreviewFocus = null;
+    }, 130);
+    return;
+  }
+  const seq = ++galleryZoomSeq;
+  galleryZoomBusy = true;
+  galleryZoomTarget = toLevel;
+  galleryZoomPending = 0;
+  const before = { scrollTop: content.scrollTop };
+  const previewScale = Math.exp(galleryWheelPreviewLog);
+  const crossfade = beginGalleryZoomCrossfade(focus);
+  clearGalleryWheelZoomPreview();
+  state.photoZoom = toLevel;
+  applyGalleryZoomClasses(null, toLevel, {
+    syncQuality: false,
+    syncWindow: false,
+    refreshLabels: false,
+  });
+  preserveGalleryZoomFocus(focus, before, fromLevel, toLevel);
+  syncVirtualPhotoGridWindowNow();
+  syncGalleryGridInteractionState();
+  try {
+    await playGalleryZoomCrossfade(crossfade, fromLevel, toLevel, previewScale);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (seq !== galleryZoomSeq) return;
+    setGalleryImageQuality(photoLayoutGrids(), toLevel);
+  } finally {
+    if (seq === galleryZoomSeq) {
+      galleryZoomBusy = false;
+      galleryWheelPreviewLog = 0;
+      galleryWheelPreviewFocus = null;
+      syncGalleryGridInteractionState();
+      flushPendingUpdate();
+    }
+  }
+}
+
 function handleGalleryWheel(e) {
   if (!e.ctrlKey || e.metaKey || e.altKey) return;
   if (menuOpen || pickerOpen || askOpen || shortcutsOpen) return;
@@ -25824,46 +27960,35 @@ function handleGalleryWheel(e) {
 
   e.preventDefault();
   e.stopPropagation();
-  const unit = e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1;
-  const pinch = galleryWheelIsPinch(e);
-  /* 浏览器可能把一次机械滚轮拆成多个 wheel 事件。第一次换档后保持手势
-     锁定，直到滚轮真正停下；一次滚动手势永远只换一档。 */
-  if (galleryWheelLocked) {
-    clearTimeout(galleryWheelUnlockTimer);
-    galleryWheelUnlockTimer = setTimeout(() => {
-      galleryWheelLocked = false;
-      galleryWheelUnlockTimer = 0;
-      galleryWheelAccum = 0;
-    }, GALLERY_WHEEL_GESTURE_IDLE_MS);
-    /* 捏合是连续手势：累计位移够了就接着换下一档，不必松手再捏一次。 */
-    if (!pinch) return;
-    galleryWheelAccum += e.deltaY * unit;
-    if (Math.abs(galleryWheelAccum) < GALLERY_WHEEL_PINCH_REPEAT_PX) return;
-    const pinchDir = galleryWheelAccum < 0 ? 1 : -1;
-    galleryWheelAccum = 0;
-    requestGalleryZoom(pinchDir, galleryZoomFocusFromEvent(e));
+  cancelGalleryRubberBand();
+  cancelGalleryLayoutPulse();
+  stopAllPhotoGridFlips();
+  const focus = galleryZoomFocusFromEvent(e, { anchorItem: true });
+  if (!galleryWheelIsPinch(e)) {
+    const dir = -Math.sign(e.deltaY);
+    if (!dir) return;
+    /* 同一串滚轮惯性只取一格；方向明确反转时立即接管，不把用户
+         反向的那一格吞在 140ms 锁里。 */
+    const now = performance.now();
+    const reversed =
+      galleryWheelMouseDirection !== 0 && dir !== galleryWheelMouseDirection;
+    const locked =
+      galleryWheelMouseLocked &&
+      now - galleryWheelMouseLastAt < GALLERY_WHEEL_MOUSE_LOCK_MS &&
+      !reversed;
+    galleryWheelMouseDirection = dir;
+    galleryWheelMouseLocked = true;
+    galleryWheelMouseLastAt = now;
+    scheduleGalleryWheelMouseUnlock();
+    if (locked) return;
+    if (galleryWheelPreviewActive) clearGalleryWheelZoomPreview();
+    /* 换档动画还在跑时把新目标排进去，由 drainGalleryZoom 在当前
+         一档结束后继续追赶；不再因为 busy 丢失后续输入。 */
+    requestGalleryZoom(dir, focus);
     return;
   }
-  galleryWheelAccum += e.deltaY * unit;
-  clearTimeout(galleryWheelTimer);
-  galleryWheelTimer = setTimeout(() => {
-    galleryWheelAccum = 0;
-  }, 120);
-  if (Math.abs(galleryWheelAccum) < 50) return;
-  const dir = galleryWheelAccum < 0 ? 1 : -1;
-  const base = clampGalleryZoom(galleryZoomTarget);
-  if (clampGalleryZoom(base + dir) === base) {
-    galleryWheelAccum = 0;
-    return;
-  }
-  galleryWheelAccum = 0;
-  galleryWheelLocked = true;
-  clearTimeout(galleryWheelUnlockTimer);
-  galleryWheelUnlockTimer = setTimeout(() => {
-    galleryWheelLocked = false;
-    galleryWheelUnlockTimer = 0;
-  }, GALLERY_WHEEL_GESTURE_IDLE_MS);
-  requestGalleryZoom(dir, galleryZoomFocusFromEvent(e));
+  if (galleryZoomBusy || galleryZoomPending !== 0) return;
+  updateGalleryWheelZoomPreview(e, focus);
 }
 
 $("#content").addEventListener("wheel", handleGalleryWheel, { passive: false });
@@ -26309,6 +28434,9 @@ function placeMenu(btn) {
      下面真装不下才翻上去（按钮贴着窗口底部时会这样） */
   const toolbarBottom = Math.ceil($(".toolbar").getBoundingClientRect().bottom);
   const inToolbar = r.bottom <= toolbarBottom;
+  /* 视口高度不足时菜单会改为滚动。此时仍要从顶栏下方开始，
+     否则菜单虽然可滚动，最早几行却会被 z-index 更高的工具栏盖住。 */
+  const clampedTop = inToolbar ? toolbarBottom : POPOVER_EDGE_GAP;
   const belowTop = inToolbar ? toolbarBottom : r.bottom + POPOVER_EDGE_GAP;
   const upward = belowTop + menu.offsetHeight > vh - POPOVER_EDGE_GAP;
   const wantedLeft = r.right - menu.offsetWidth;
@@ -26318,12 +28446,12 @@ function placeMenu(btn) {
     POPOVER_EDGE_GAP,
     Math.min(top, vh - POPOVER_EDGE_GAP - menu.offsetHeight),
   );
-  const maxMenuHeight = Math.max(240, vh - POPOVER_EDGE_GAP * 2);
+  const maxMenuHeight = Math.max(240, vh - clampedTop - POPOVER_EDGE_GAP);
   const clamped = menu.offsetHeight > maxMenuHeight;
   menu.classList.toggle("is-viewport-clamped", clamped);
   if (clamped) {
     menu.style.maxHeight = `${maxMenuHeight}px`;
-    top = POPOVER_EDGE_GAP;
+    top = clampedTop;
   } else {
     menu.style.removeProperty("max-height");
   }
@@ -26887,6 +29015,7 @@ function openMenu(btn, kind = "create", { albumMenuEdit = false } = {}) {
   btn.classList.add("is-open");
   btn.setAttribute("aria-expanded", "true");
   if (btn.id === "albumMenuBtn") syncAlbumMenuEditButton();
+  scheduleCornerMaterialSync();
 
   cancelMenuAnims();
   /* Both menus grow from the trigger's corner. Scaling leaves the authored
@@ -27040,6 +29169,7 @@ function closeMenu({
   menuAnchorBtn?.classList.remove("is-open");
   menuAnchorBtn?.setAttribute("aria-expanded", "false");
   menuAnchorBtn = null;
+  scheduleCornerMaterialSync();
 
   if (renameEditor && !reducedMotion) {
     /* 保存后不要只让整张菜单淡掉。先让命名框在原位淡出，
@@ -27720,6 +29850,7 @@ $("#popMenu").addEventListener("click", (e) => {
     return;
   }
   const albumOptions = menuKind === "album" || menuKind === "library";
+  if (albumOptions && !ensureActiveLibraryFeature()) return;
   /* 展开筛选 / 类型 / 排序时，其他行被模糊并盖住了。它们视觉上已经是背景，
      点这些地方要和点弹窗外面一样：先收回二级菜单，不触发下面那一行。
      照片菜单里的时间编辑器也遵守同一规则，收回卡片但保留三点菜单。 */
@@ -27901,6 +30032,7 @@ $("#popMenu").addEventListener("click", (e) => {
       ? selectionMenuItems
       : selectedItemsInViewOrder();
   if (albumOptions && menuId === "slideshow") {
+    if (!ensureActiveLibraryFeature()) return;
     const slideshowItems = photoWallCandidates(state.items);
     if (!slideshowItems.length) return;
     const slideshowTitle =
@@ -28271,12 +30403,13 @@ function trashActionAlbumIds() {
 
 function trashBulkCountText(items, albumIds) {
   const parts = [];
-  if (items.length) parts.push(`${items.length} ${selectionUnit(items)}`);
+  if (items.length)
+    parts.push(`${formatCount(items.length)} ${selectionUnit(items)}`);
   if (albumIds.length) {
     parts.push(
       uiLanguageIsEnglish()
-        ? `${albumIds.length} ${albumIds.length === 1 ? "album" : "albums"}`
-        : `${albumIds.length} 个相簿`,
+        ? `${formatCount(albumIds.length)} ${albumIds.length === 1 ? "album" : "albums"}`
+        : `${formatCount(albumIds.length)} 个相簿`,
     );
   }
   return parts.join(uiLanguageIsEnglish() ? " and " : "和");
@@ -29487,7 +31620,7 @@ function libraryPickerAlbumCardHTML(album) {
     <div class="cover-frame">${coverHTML(album, true)}</div>
     <div class="card-meta">
       <div class="card-title">${esc(albumDisplayName(album))}</div>
-      ${count ? `<div class="card-count">${count}</div>` : ""}
+      ${count ? `<div class="card-count">${formatCount(count)}</div>` : ""}
     </div>
   </div>`;
 }
@@ -30004,29 +32137,13 @@ const SIDEBAR_HOVER_CLOSE_MOTION_MS = 380;
 const SIDEBAR_MAP_HOVER_SAFE_ZONE_WIDTH = 96;
 const SIDEBAR_MAP_HOVER_SAFE_ZONE_BOTTOM = 112;
 
-function photoWallLibraryRailIsLocked() {
-  return (
-    state.activeId === "photoWall" &&
-    !state.photoWall &&
-    !state.photoWallAlbumId &&
-    !state.masonryWallAlbumId &&
-    !state.filmrollWallAlbumId &&
-    !state.mosaicWallAlbumId
-  );
-}
-
 function syncSidebarRailButtonState() {
   const button = $("#sidebarRailBtn");
   if (!button) return;
-  const locked = photoWallLibraryRailIsLocked();
   const hoverModeDisabled = hoverExpandSidebar;
-  button.disabled = locked;
-  button.classList.toggle("is-context-disabled", locked || hoverModeDisabled);
-  button.setAttribute("aria-disabled", String(locked || hoverModeDisabled));
-  if (locked) {
-    button.setAttribute("aria-label", "照片墙页面中不能收起相簿栏");
-    return;
-  }
+  button.disabled = false;
+  button.classList.toggle("is-context-disabled", hoverModeDisabled);
+  button.setAttribute("aria-disabled", String(hoverModeDisabled));
   const collapsed = $("#sidebar").classList.contains("is-rail-collapsed");
   button.setAttribute(
     "aria-expanded",
@@ -30338,7 +32455,8 @@ $("#trashNavBtn").addEventListener(
   { passive: true },
 );
 const RAIL_GRID_SELECTOR = "#content .album-grid, #content .photo-grid";
-const RAIL_ITEM_SELECTOR = "#content .album-grid > *, #content .photo-grid > *";
+const RAIL_ITEM_SELECTOR =
+  "#content .album-grid > *, #content .photo-grid > *, #content .photo-wall-style-choice";
 const RAIL_ITEM_MARGIN = 320;
 const RAIL_VIRTUAL_EXTRA_ROWS = 2;
 
@@ -30420,6 +32538,9 @@ function animateContentReflow(before, duration = 280) {
 function railItemKey(el, fallbackIndex) {
   if (el.dataset.album != null) return `album:${el.dataset.album}`;
   if (el.dataset.index != null) return `tile:${el.dataset.index}`;
+  if (el.dataset.wallStyleChoice != null) {
+    return `wall-style:${el.dataset.wallStyleChoice}`;
+  }
   if (el.dataset.trashAlbum != null)
     return `trash-album:${el.dataset.trashAlbum}`;
   return `grid-item:${fallbackIndex}`;
@@ -30434,8 +32555,11 @@ function captureRailItems({ useLayout = false } = {}) {
     Number.parseFloat(getComputedStyle(content).paddingLeft) || 0;
   let fallbackIndex = 0;
   for (const el of document.querySelectorAll(RAIL_ITEM_SELECTOR)) {
-    const key = railItemKey(el, fallbackIndex++);
     let rect = el.getBoundingClientRect();
+    /* hidden 的其它照片墙分区仍然留在 DOM 中，但宽高都是 0。
+       它们既不该参与 FLIP，也不能覆盖同 ID 的活动分区槽位。 */
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const key = railItemKey(el, fallbackIndex++);
     const grid = el.dataset.index != null ? el.closest(".photo-grid") : null;
     const layout = grid && virtualPhotoGridLayouts.get(grid);
     if (grid && layout) layouts.set(grid, layout);
@@ -30468,6 +32592,7 @@ function captureRailItems({ useLayout = false } = {}) {
   return {
     items,
     layouts,
+    scrollTop: content.scrollTop,
     contentLeft: contentRect.left,
     contentTop: contentRect.top,
     contentOriginLeft: contentRect.left + contentPaddingLeft,
@@ -30514,17 +32639,29 @@ function prepareRailTargetItems(start, target) {
   if (!content || !target.layouts?.size) return;
   target.entering = new Set();
   const contentRect = content.getBoundingClientRect();
-  const scrollDelta = target.scrollTop - content.scrollTop;
+  /* 快速反转时目标可能来自上一轮布局缓存。缓存缺少 scrollTop 会让
+     scrollDelta 变成 NaN，下面的范围比较全部失配，最终把整库 7000+
+     个格子一次性插进 DOM。这里必须把异常值收回到当前视口。 */
+  const scrollDelta = Number.isFinite(target.scrollTop)
+    ? target.scrollTop - content.scrollTop
+    : 0;
   for (const [grid, layout] of target.layouts) {
     const gridRect = grid.getBoundingClientRect();
     const startLayout = start.layouts?.get(grid);
-    for (const box of layout.boxes) {
+    const bottomMargin = railItemBottomMargin(grid, layout);
+    const boxes = virtualPhotoGridVisibleBoxes(
+      layout,
+      contentRect.top - RAIL_ITEM_MARGIN - gridRect.top + scrollDelta,
+      contentRect.bottom + bottomMargin - gridRect.top + scrollDelta,
+      0,
+    );
+    for (const box of boxes) {
       const key = `tile:${box.index}`;
       if (target.items.has(key)) continue;
       const predictedTop = gridRect.top + box.y - scrollDelta;
       if (
         predictedTop + box.height < contentRect.top - RAIL_ITEM_MARGIN ||
-        predictedTop > contentRect.bottom + railItemBottomMargin(grid, layout)
+        predictedTop > contentRect.bottom + bottomMargin
       ) {
         continue;
       }
@@ -30729,7 +32866,9 @@ function finishRailMotion({ settlePhotoGrid = true } = {}) {
     applyPhotoGridLayouts({ preserveViewport: false, syncWindow: false });
     photoGridLastWidth = photoLayoutGrids()[0]?.clientWidth ?? -1;
     const content = $("#content");
-    if (content) content.scrollTop = motion.targetScrollTop;
+    if (content && Number.isFinite(motion.targetScrollTop)) {
+      content.scrollTop = motion.targetScrollTop;
+    }
     syncVirtualPhotoGridWindowNow();
     scheduleVisibleGalleryImageSweep();
   }
@@ -30855,7 +32994,7 @@ function setSidebarRailCollapsed(collapsed, { animate = true } = {}) {
 
 function toggleSidebarRail() {
   if (contextMenuOpen || !$("#viewer").hidden) return;
-  if (photoWallLibraryRailIsLocked() || hoverExpandSidebar) {
+  if (hoverExpandSidebar) {
     syncSidebarRailButtonState();
     return;
   }
@@ -30881,10 +33020,12 @@ function handleSidebarRailPress(event) {
   event.stopImmediatePropagation();
   if (sidebarRailPressHandled) return;
   sidebarRailPressHandled = true;
-  toggleSidebarRail();
-  setTimeout(() => {
+  /* 先安排解锁再执行动画。即便布局阶段抛错，也不会把下一帧的点击
+     永久吞掉，用户仍可再次开合相簿栏。 */
+  window.setTimeout(() => {
     sidebarRailPressHandled = false;
   }, 0);
+  toggleSidebarRail();
 }
 
 /* pointerdown 和 mousedown 都监听：前者更及时，后者兜底旧版 Chromium /
@@ -31068,7 +33209,7 @@ const COVER_PRELOAD_CONCURRENCY = 8;
 
 async function preloadImageUrls(
   urls,
-  { timeout = 5000, concurrency = 8 } = {},
+  { timeout = 5000, concurrency = 8, onLoaded = null } = {},
 ) {
   const queue = [...new Set(urls || [])];
   if (!queue.length) return;
@@ -31090,8 +33231,16 @@ async function preloadImageUrls(
       };
       img.onload = () => {
         /* onload 只代表资源到了；decode 完再换界面，插入时才是已经能画的图。 */
-        if (img.decode) img.decode().then(done, done);
-        else done();
+        const loaded = img.decode
+          ? img.decode().catch(() => {})
+          : Promise.resolve();
+        loaded.then(() => {
+          if (settled) return;
+          try {
+            onLoaded?.(img, url);
+          } catch {}
+          done();
+        });
       };
       img.onerror = done;
       img.src = url;
@@ -31102,6 +33251,48 @@ async function preloadImageUrls(
       while (next < queue.length) await loadOne(queue[next++]);
     }),
   );
+}
+
+/* 切换图库前先把新库首屏的 48px 预览真正解码好，并把节点交给 L0 池。
+   这样新网格第一次挂进 DOM 时可以直接接回已解码节点，不会先画一排灰骨架。 */
+const FIRST_SCREEN_LOW_RES_PREVIEW_MIN = 36;
+const FIRST_SCREEN_LOW_RES_PREVIEW_MAX = 240;
+const FIRST_SCREEN_LOW_RES_PREVIEW_TIMEOUT_MS = 1800;
+
+function firstScreenLowResPreviewLimit() {
+  const range = galleryViewportIndexRange();
+  const visibleCount = range ? range.last - range.first + 1 : 0;
+  return Math.min(
+    FIRST_SCREEN_LOW_RES_PREVIEW_MAX,
+    Math.max(FIRST_SCREEN_LOW_RES_PREVIEW_MIN, visibleCount * 2),
+  );
+}
+
+async function preloadFirstScreenLowResPreviews(
+  items,
+  limit = firstScreenLowResPreviewLimit(),
+) {
+  const urls = (items || [])
+    .slice(0, limit)
+    .filter(Boolean)
+    .map((item) => thumbLowResUrl(item));
+  if (!urls.length) return;
+  await preloadImageUrls(urls, {
+    timeout: FIRST_SCREEN_LOW_RES_PREVIEW_TIMEOUT_MS,
+    concurrency: 8,
+    onLoaded: (img, url) => thumbLowResKeep(url, img),
+  });
+}
+
+async function prepareLibraryFirstScreen() {
+  const data = await api("/api/library/items");
+  cacheCollectionData("library", "", data);
+  state.album = null;
+  state.albumItemsRaw = Array.isArray(data.items) ? data.items : [];
+  state.albumItems = sortLibraryAlbumItems();
+  state.items = visibleAlbumItems();
+  await preloadFirstScreenLowResPreviews(state.items);
+  void loadGalleryAtlasPage(0, state.items);
 }
 
 /* 后台刷新完成后，先把新封面装进浏览器缓存，再换界面。
@@ -31168,13 +33359,26 @@ async function waitForRootImport(
         renderStatus();
       }
     } else if (
+      scan.browsable === true &&
+      Number(scan.browsableAt) >= Number(requestedAt)
+    ) {
+      return {
+        rootId,
+        importId: importContext?.importId || null,
+        browsable: true,
+        metadataReady: scan.metadataReady === true,
+      };
+    } else if (
       scan.phase === "done" &&
       Number(scan.finishedAt) >= Number(requestedAt)
     ) {
       await new Promise((resolve) =>
         window.setTimeout(resolve, ROOT_IMPORT_POLL_MS),
       );
-      return api("/api/state");
+      return {
+        rootId,
+        importId: importContext?.importId || null,
+      };
     } else if (
       scan.phase === "error" &&
       Number(scan.finishedAt) >= Number(requestedAt)
@@ -31226,9 +33430,94 @@ async function cancelRootImport() {
   }
 }
 
+async function applyImportedRootState(finalState, importContext = null) {
+  await preloadCoverThumbs(finalState);
+  applyState(finalState);
+  resetPhotoWallLibraryState();
+  invalidateLocationItems();
+  /* 换了图库，档位回到标准档：下一次浏览从默认大小开始。 */
+  resetGalleryZoomForViewChange();
+  navSelectionSeq += 1;
+  state.activeId = "library";
+  lastRev = Number(finalState.revision) || lastRev;
+  await prepareLibraryFirstScreen();
+  await loadLibrary();
+  rememberActiveView();
+  state.rootImport = null;
+  state.busy = "";
+  render();
+}
+
+function queueImportedRootActivation(importContext) {
+  pendingImportedRootActivation = {
+    importContext,
+    activatedState: null,
+  };
+  state.rootImport = null;
+  const deferred = shouldDeferLiveRefresh();
+  state.busy = deferred ? "" : "图库导入完成，正在打开…";
+  renderStatus();
+  if (deferred) {
+    toast(
+      uiLanguageIsEnglish()
+        ? "Import finished. The new library will open after you leave this view."
+        : "图库导入完成，退出当前界面后会切换到新图库",
+    );
+  }
+  schedulePendingUpdateFlush(0);
+}
+
+async function flushPendingRootImport() {
+  const pending = pendingImportedRootActivation;
+  if (!pending) return true;
+  if (shouldDeferLiveRefresh()) {
+    schedulePendingUpdateFlush();
+    return false;
+  }
+  try {
+    let finalState = pending.activatedState;
+    if (!finalState) {
+      const completed = await api("/api/imports/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          importId: pending.importContext.importId,
+          rootId: pending.importContext.rootId,
+        }),
+      });
+      finalState = completed.state || (await api("/api/state"));
+      pending.activatedState = finalState;
+    }
+    if (shouldDeferLiveRefresh()) {
+      schedulePendingUpdateFlush();
+      return false;
+    }
+    pendingImportedRootActivation = null;
+    await applyImportedRootState(finalState, pending.importContext);
+    return true;
+  } catch (err) {
+    pending.activatedState = null;
+    pendingUpdateFlushTimer && window.clearTimeout(pendingUpdateFlushTimer);
+    pendingUpdateFlushTimer = window.setTimeout(() => {
+      pendingUpdateFlushTimer = 0;
+      void flushPendingUpdate();
+    }, POLL_MS);
+    console.error("[图库导入切换失败]", err.message || String(err));
+    return false;
+  }
+}
+
 async function pickFolder() {
   if (rootImportInProgress) {
     toast("正在导入图库，请等待当前任务完成");
+    return;
+  }
+  if (pendingImportedRootActivation) {
+    toast(
+      uiLanguageIsEnglish()
+        ? "The imported library is waiting to open after you leave the current view."
+        : "新图库已导入，退出当前界面后会生效",
+    );
     return;
   }
   if (exportInFlight || state.exportTask) {
@@ -31239,6 +33528,9 @@ async function pickFolder() {
   try {
     const picked = await api("/api/pick-folder", { method: "POST" });
     if (!picked.path) return;
+    /* 首次导入没有旧图库时，主窗口仍然可以立即进入应用外壳。
+       扫描与提交在后台继续，底部保留取消入口，不再把整个界面藏在启动遮罩后面。 */
+    showWindowWithInterface();
     /* 选定文件夹后立即收起图库列表，不等导入完成；
        取消选择文件夹则不改变展开状态。 */
     if (state.libraryPickerOpen) void toggleLibraryPicker();
@@ -31264,34 +33556,18 @@ async function pickFolder() {
       state.rootImport = importContext;
       renderStatus();
     }
-    const finalState = res.background
-      ? await waitForRootImport(
-          res.root.id,
-          requestedAt,
-          `正在导入 ${picked.path}`,
-          importContext,
-        )
-      : res.state;
-    await preloadCoverThumbs(finalState);
-    applyState(finalState);
-    resetPhotoWallLibraryState();
-    invalidateLocationItems();
-    /* 换了图库，档位回到标准档：下一次浏览从默认大小开始。 */
-    resetGalleryZoomForViewChange();
-    state.activeId = "library";
-    await loadLibrary();
-    rememberActiveView();
-    lastRev = Number(finalState.revision) || lastRev;
-    if (res.background && importContext.importId) {
-      void api("/api/imports/complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ importId: importContext.importId }),
-      }).catch(() => {});
+    if (res.background) {
+      await waitForRootImport(
+        res.root.id,
+        requestedAt,
+        `正在导入 ${picked.path}`,
+        importContext,
+      );
+      queueImportedRootActivation(importContext);
+      await flushPendingUpdate();
+      return;
     }
-    state.rootImport = null;
-    state.busy = "";
-    render();
+    await applyImportedRootState(res.state);
   } catch (err) {
     const importContext = state.rootImport;
     state.busy = "";
@@ -31355,6 +33631,7 @@ async function switchRoot(rootId) {
     state.expanded.clear();
     /* 新根目录从自己的 revision 开始取列表，避免仍以旧图库的版本号建缓存。 */
     lastRev = Number(res.state.revision) || 0;
+    await prepareLibraryFirstScreen();
     await loadLibrary();
     rememberActiveView();
     state.busy = "";
@@ -31395,8 +33672,68 @@ async function switchToNextRoot() {
 /* ------------------- 自动更新（磁盘一变，界面自己刷） ------------------- */
 
 let lastRev = null;
-let pendingUpdate = false; /* 正在选择 / 看大图时先攒着，退出来再刷 */
+let pendingUpdate = false;
+let pendingUpdateFlushTimer = 0;
+let pendingUpdateFlushRunning = false;
+let pendingImportedRootActivation = null;
 const POLL_MS = 2000;
+const PENDING_UPDATE_RETRY_MS = 250;
+
+function hasVisibleDialogSurface() {
+  return [...document.querySelectorAll('[role="dialog"]')].some(
+    (dialog) =>
+      !dialog.hidden &&
+      dialog.getAttribute("aria-hidden") !== "true" &&
+      dialog.getClientRects().length > 0,
+  );
+}
+
+/* 所有会占用当前照片集合的交互都走这一扇门。新增查看模式时只要接入这里，
+   外部扫描、封面刷新和新图库激活就都不会在用户操作中途替换 DOM。 */
+function shouldDeferLiveRefresh() {
+  return Boolean(
+    state.rootImport ||
+    menuOpen ||
+    pickerOpen ||
+    contextMenuOpen ||
+    state.libraryPickerOpen ||
+    state.select ||
+    state.copyTarget ||
+    state.edit ||
+    state.filmstrip ||
+    state.photoWall ||
+    photoWallTransition !== "idle" ||
+    state.activeId === "photoWall" ||
+    state.albumMapOpen ||
+    (state.activeId === "locations" && state.locationSubview === "map") ||
+    photoEditorOpen ||
+    !$("#viewer").hidden ||
+    galleryZoomBusy ||
+    document.documentElement.classList.contains("gallery-is-scrolling") ||
+    albumGesture ||
+    albumSettling ||
+    window.albumSlideshow?.isOpen() ||
+    hasVisibleDialogSurface(),
+  );
+}
+
+function schedulePendingUpdateFlush(delay = PENDING_UPDATE_RETRY_MS) {
+  if (
+    pendingUpdateFlushTimer ||
+    (!pendingUpdate && !pendingImportedRootActivation)
+  ) {
+    return;
+  }
+  pendingUpdateFlushTimer = window.setTimeout(() => {
+    pendingUpdateFlushTimer = 0;
+    void flushPendingUpdate();
+  }, delay);
+}
+
+function markPendingExternalUpdate() {
+  pendingUpdate = true;
+  schedulePendingUpdateFlush();
+}
 
 async function pollRevision() {
   let info;
@@ -31413,26 +33750,24 @@ async function pollRevision() {
     ) {
       state.locationItemsRevision = info.rev;
     }
+    if (pendingUpdate || pendingImportedRootActivation) {
+      void flushPendingUpdate();
+    }
     return;
   }
-  if (info.rev === lastRev) return;
-  lastRev = info.rev;
-  await applyExternalUpdate();
+  if (info.rev !== lastRev) {
+    lastRev = info.rev;
+    markPendingExternalUpdate();
+  }
+  if (pendingUpdate || pendingImportedRootActivation) {
+    await flushPendingUpdate();
+  }
 }
 
-async function applyExternalUpdate() {
-  /* 选择模式、查看器或正拖着相簿时先别动，否则列表一换就对不上了 */
-  if (
-    state.select ||
-    !$("#viewer").hidden ||
-    galleryZoomBusy ||
-    albumGesture ||
-    albumSettling ||
-    state.photoWall ||
-    window.albumSlideshow?.isOpen()
-  ) {
-    pendingUpdate = true;
-    return;
+async function applyExternalUpdate({ force = false } = {}) {
+  if (!force && shouldDeferLiveRefresh()) {
+    markPendingExternalUpdate();
+    return false;
   }
   const scrollTop = $("#content").scrollTop;
   state.busy = "文件夹有更新，正在刷新…";
@@ -31440,6 +33775,10 @@ async function applyExternalUpdate() {
   try {
     const data = await api("/api/state");
     await preloadChangedCoverThumbs(state.albums, data);
+    if (shouldDeferLiveRefresh()) {
+      markPendingExternalUpdate();
+      return false;
+    }
     applyState(data);
     if (state.activeId === "locations") {
       await reloadActiveCollection();
@@ -31457,19 +33796,52 @@ async function applyExternalUpdate() {
       /* 当前这个相簿在磁盘上被删掉了 */
       fallbackToAllAlbums();
     }
+    if (shouldDeferLiveRefresh()) {
+      markPendingExternalUpdate();
+      return false;
+    }
   } catch {
     /* 读失败就保持原样，等下一轮 */
+    pendingUpdate = true;
+    return false;
+  } finally {
+    state.busy = "";
   }
-  state.busy = "";
   render();
   $("#content").scrollTop = scrollTop; /* 别把人家的浏览位置顶回去 */
+  if (photoAnchor) scrollToLibraryTimelineAnchor(photoAnchor);
   void promptFolderImports();
+  return true;
 }
 
-function flushPendingUpdate() {
-  if (!pendingUpdate) return;
-  pendingUpdate = false;
-  return applyExternalUpdate();
+async function flushPendingUpdate() {
+  if (
+    pendingUpdateFlushRunning ||
+    (!pendingUpdate && !pendingImportedRootActivation)
+  ) {
+    return false;
+  }
+  if (shouldDeferLiveRefresh()) {
+    schedulePendingUpdateFlush();
+    return false;
+  }
+  pendingUpdateFlushRunning = true;
+  try {
+    if (pendingImportedRootActivation) {
+      const activated = await flushPendingRootImport();
+      if (!activated) return false;
+    }
+    if (!pendingUpdate) return true;
+    pendingUpdate = false;
+    const applied = await applyExternalUpdate({ force: true });
+    if (!applied) pendingUpdate = true;
+    return applied;
+  } finally {
+    pendingUpdateFlushRunning = false;
+    if (pendingUpdate || pendingImportedRootActivation) {
+      schedulePendingUpdateFlush();
+    }
+  }
 }
 
 let undoing = false;
@@ -31774,7 +34146,7 @@ function updateViewerInfoPopover(item = state.items[viewerIndex]) {
     Number.isFinite(duration) && duration > 0
       ? `${String(Math.floor(duration / 60)).padStart(2, "0")}:` +
         `${String(Math.floor(duration % 60)).padStart(2, "0")}`
-      : "--:--";
+      : "";
   const optical = [
     item.focal ? `${Math.round(item.focal)} mm` : "",
     item.f_number ? `f/${item.f_number}` : "",
@@ -31788,22 +34160,20 @@ function updateViewerInfoPopover(item = state.items[viewerIndex]) {
           ? `${Number(item.fps)
               .toFixed(2)
               .replace(/\.?0+$/, "")} FPS`
-          : "- FPS",
+          : "",
         durationText,
       ]
     : [
-        item.iso ? `ISO ${item.iso}` : "-",
-        item.focal ? `${Math.round(item.focal)} mm` : "-",
-        "-",
-        item.f_number ? `f/${item.f_number}` : "-",
-        item.exposure ? `1/${Math.round(1 / item.exposure)} s` : "-",
-      ];
+        item.iso ? `ISO ${item.iso}` : "",
+        item.focal ? `${Math.round(item.focal)} mm` : "",
+        item.f_number ? `f/${item.f_number}` : "",
+        item.exposure ? `1/${Math.round(1 / item.exposure)} s` : "",
+      ].filter(Boolean);
   $("#viewerInfoDate").textContent = formatInfoDate(itemTime(item));
   $("#viewerInfoName").textContent = fileNameStem(item.name) || "未命名项目";
   const diskPath = String(item.path || "").trim();
   const pathNode = $("#viewerInfoPath");
   pathNode.textContent = diskPath || "磁盘路径不可用";
-  pathNode.removeAttribute("title");
   pathNode.dataset.itemId = diskPath ? String(item.id) : "";
   pathNode.disabled = !diskPath;
   pathNode.setAttribute(
@@ -31831,11 +34201,21 @@ function updateViewerInfoPopover(item = state.items[viewerIndex]) {
   );
   liveIcon.innerHTML = liveIcon.hidden ? "" : livePhotoGlyphHTML();
   $("#viewerInfoVideoIcon").hidden = !isVideo;
-  $("#viewerInfoSummary").textContent = isVideo
-    ? `${videoResolution} · ${dimensions} · ${size}`
-    : `${megapixels} · ${dimensions} · ${size}`;
+  const summary = (
+    isVideo
+      ? [videoResolution, dimensions, size]
+      : [megapixels, dimensions, size]
+  ).filter((value) => value && value !== "-");
+  const summaryNode = $("#viewerInfoSummary");
+  summaryNode.textContent = summary.join(" · ");
+  summaryNode.hidden = summary.length === 0;
   const specsNode = $("#viewerInfoSpecs");
   specsNode.classList.toggle("is-video", isVideo);
+  specsNode.hidden = specs.length === 0;
+  specsNode.style.setProperty(
+    "--viewer-spec-count",
+    String(Math.max(1, specs.length)),
+  );
   specsNode.innerHTML = specs
     .map((value) => `<span class="viewer-info-spec">${esc(value)}</span>`)
     .join("");
@@ -31859,12 +34239,14 @@ function updateViewerInfoPopover(item = state.items[viewerIndex]) {
       : hasLocation
         ? "调整位置…"
         : "添加位置…";
-  locationButton.title =
+  locationButton.setAttribute(
+    "aria-description",
     item.locationNameOverride != null ||
-    item.gpsLatOverride != null ||
-    item.gpsLonOverride != null
+      item.gpsLatOverride != null ||
+      item.gpsLonOverride != null
       ? "该位置仅保存在“照片”中，磁盘原文件未被修改"
-      : "位置来自磁盘 EXIF；点击可调整";
+      : "位置来自磁盘 EXIF；点击可调整",
+  );
 }
 
 function renderViewerInfoMap(item) {
@@ -31949,7 +34331,7 @@ function createContextInfoMapFooter(item, lat, lon) {
   const footer = document.createElement("div");
   footer.className = "context-info-map-footer";
   footer.dataset.contextLocationAdjust = "";
-  footer.title = "调整项目位置";
+  footer.setAttribute("aria-label", "调整项目位置");
   const label = document.createElement("span");
   label.className = "context-info-map-label";
   label.textContent =
@@ -32944,6 +35326,50 @@ function viewerZoomSurface() {
   return $("#viewerPhoto") || $("#viewerStage video");
 }
 
+function viewerPanContent(surface = viewerZoomSurface()) {
+  if (!surface) return null;
+  if (surface.matches("video")) return surface;
+  return (
+    surface.querySelector(
+      "img:not(.viewer-photo-poster):not(.viewer-live-video)",
+    ) ||
+    surface.querySelector("img") ||
+    surface
+  );
+}
+
+function viewerPanLimits(surface = viewerZoomSurface()) {
+  const stage = $("#viewerStage");
+  const content = viewerPanContent(surface);
+  if (!stage || !surface || !content) return { x: 0, y: 0 };
+  const stageRect = stage.getBoundingClientRect();
+  const scale = viewerZoom * viewerRotationFit(surface);
+  const crop = surface.matches("video") ? viewerVideoCrop(content) : null;
+  let width = content.offsetWidth * (crop?.w || 1) * scale;
+  let height = content.offsetHeight * (crop?.h || 1) * scale;
+  if (Math.abs(viewerRotation % 180) === 90) {
+    [width, height] = [height, width];
+  }
+  return {
+    x: Math.max(0, (width - stageRect.width) / 2),
+    y: Math.max(0, (height - stageRect.height) / 2),
+  };
+}
+
+function rubberBandViewerPan(value, limit) {
+  const max = Math.max(0, Number(limit) || 0);
+  const position = Number(value) || 0;
+  if (position > max) return max + (position - max) * 0.22;
+  if (position < -max) return -max + (position + max) * 0.22;
+  return position;
+}
+
+function clampViewerPanToBounds(surface = viewerZoomSurface()) {
+  const limits = viewerPanLimits(surface);
+  viewerPanX = Math.max(-limits.x, Math.min(limits.x, viewerPanX));
+  viewerPanY = Math.max(-limits.y, Math.min(limits.y, viewerPanY));
+}
+
 /* 横图转成竖图后，原来的显示尺寸已经装不进舞台。
    这里只在 90° / 270° 时补一个适配缩放，避免画面上下或左右被裁掉。 */
 function viewerRotationFit(surface = viewerZoomSurface()) {
@@ -33028,6 +35454,7 @@ function preserveViewerPanOnResize() {
     return;
   viewerPanX *= ratio;
   viewerPanY *= ratio;
+  clampViewerPanToBounds();
   applyViewerZoom();
 }
 
@@ -33105,6 +35532,8 @@ function setViewerZoom(value) {
   if (viewerZoom <= 1) {
     viewerPanX = 0;
     viewerPanY = 0;
+  } else {
+    clampViewerPanToBounds();
   }
   applyViewerZoom();
 }
@@ -35208,7 +37637,7 @@ function syncRenderedRatingTiles() {
   }
 }
 
-async function saveFilmstripRating(value) {
+async function saveFilmstripRating(value, { pop = true } = {}) {
   if (ratingInFlight) return;
   const index = filmstripCurrentIndex();
   const item = state.items[index];
@@ -35219,7 +37648,7 @@ async function saveFilmstripRating(value) {
   const previousRating = normalizeItemRating(item.rating);
   ratingInFlight = true;
   applyRatingState([item.id], nextRating);
-  syncFilmstripRating(item, { pop: true });
+  syncFilmstripRating(item, { pop });
   try {
     const savedRating = await saveItemRating([item.id], nextRating);
     applyRatingState([item.id], savedRating);
@@ -35237,7 +37666,7 @@ async function saveFilmstripRating(value) {
   }
 }
 
-async function saveViewerRating(value) {
+async function saveViewerRating(value, { pop = true } = {}) {
   if (ratingInFlight) return;
   const item = state.items[viewerIndex];
   const viewer = $("#viewer");
@@ -35252,7 +37681,7 @@ async function saveViewerRating(value) {
   const previousRating = normalizeItemRating(item.rating);
   ratingInFlight = true;
   applyRatingState([item.id], nextRating);
-  syncViewerRating(item, { pop: true });
+  syncViewerRating(item, { pop });
   syncRatingTile(item);
   try {
     const savedRating = await saveItemRating([item.id], nextRating);
@@ -35322,9 +37751,382 @@ for (const button of document.querySelectorAll("[data-viewer-step]")) {
   bindViewerStepButton(button);
 }
 
+/* ---------------------- 查看器大图缓存 ---------------------- */
+/* 网格缩略图已经有磁盘、HTTP 和解码池三层缓存；查看器的大图原来仍走
+   no-cache，并会在每次翻页时重新建 <img>。这里补上同一套生命周期：
+   当前照片前后各留两张，在空闲时提前请求并真正 decode；同时按机器内存
+   保留最近看过的完整节点。返回已看过的照片时直接把节点接回舞台，
+   不重新请求、不重新解码，也不会再闪一次加载圈。 */
+const VIEWER_IMAGE_CACHE_BASE_MB = 256;
+const VIEWER_IMAGE_CACHE_MIN_MB = 96;
+const VIEWER_IMAGE_CACHE_MAX_MB = 512;
+const VIEWER_IMAGE_CACHE_MAX_ENTRIES = 12;
+const VIEWER_IMAGE_WARM_RADIUS = 2;
+const VIEWER_IMAGE_WARM_CONCURRENCY = 2;
+const VIEWER_IMAGE_WARM_DELAY_MS = 80;
+const VIEWER_IMAGE_WARM_TIMEOUT_MS = 15000;
+const viewerImageCache = new Map();
+const viewerImageWarmJobs = new Map();
+let viewerImageCacheBytes = 0;
+let viewerActiveImageKey = "";
+let viewerImageWarmQueue = [];
+let viewerImageWarmTimer = 0;
+
+function viewerImageCacheBudgetBytes() {
+  const memoryGb = Number(navigator.deviceMemory) || 8;
+  const scale = Math.min(2, Math.max(0.5, memoryGb / 8));
+  return (
+    Math.min(
+      VIEWER_IMAGE_CACHE_MAX_MB,
+      Math.max(
+        VIEWER_IMAGE_CACHE_MIN_MB,
+        Math.round(VIEWER_IMAGE_CACHE_BASE_MB * scale),
+      ),
+    ) *
+    1024 *
+    1024
+  );
+}
+
+const VIEWER_IMAGE_CACHE_BUDGET = viewerImageCacheBudgetBytes();
+
+const viewerImageBytes = (img) =>
+  (img?.naturalWidth || 0) * (img?.naturalHeight || 0) * 4;
+
+function discardViewerImage(img) {
+  if (!img) return;
+  img.onload = null;
+  img.onerror = null;
+  img.removeAttribute("src");
+}
+
+function trimViewerImageCache(budget = VIEWER_IMAGE_CACHE_BUDGET) {
+  const satisfied = () =>
+    viewerImageCacheBytes <= budget &&
+    viewerImageCache.size <= VIEWER_IMAGE_CACHE_MAX_ENTRIES;
+  while (!satisfied()) {
+    let victimKey = "";
+    for (const [key, entry] of viewerImageCache) {
+      if (entry.inUse || key === viewerActiveImageKey) continue;
+      victimKey = key;
+      break;
+    }
+    if (!victimKey) break;
+    const entry = viewerImageCache.get(victimKey);
+    viewerImageCache.delete(victimKey);
+    viewerImageCacheBytes = Math.max(
+      0,
+      viewerImageCacheBytes - (Number(entry?.bytes) || 0),
+    );
+    discardViewerImage(entry?.img);
+  }
+}
+
+function keepViewerImage(url, img) {
+  if (
+    !url ||
+    url.startsWith("data:") ||
+    !(img?.naturalWidth > 0 && img?.naturalHeight > 0)
+  ) {
+    return false;
+  }
+  const bytes = viewerImageBytes(img);
+  const previous = viewerImageCache.get(url);
+  if (previous) {
+    viewerImageCache.delete(url);
+    viewerImageCacheBytes = Math.max(
+      0,
+      viewerImageCacheBytes - (Number(previous.bytes) || 0),
+    );
+    if (previous.img !== img) discardViewerImage(previous.img);
+  }
+  img.onload = null;
+  img.onerror = null;
+  viewerImageCache.set(url, { img, bytes, inUse: false });
+  viewerImageCacheBytes += bytes;
+  trimViewerImageCache();
+  return viewerImageCache.has(url);
+}
+
+function takeViewerImage(url) {
+  const entry = url ? viewerImageCache.get(url) : null;
+  if (
+    !entry?.img ||
+    !entry.img.complete ||
+    !entry.img.naturalWidth ||
+    !entry.img.naturalHeight
+  ) {
+    if (entry) {
+      viewerImageCache.delete(url);
+      viewerImageCacheBytes = Math.max(
+        0,
+        viewerImageCacheBytes - (Number(entry.bytes) || 0),
+      );
+      discardViewerImage(entry.img);
+    }
+    return null;
+  }
+  viewerImageCache.delete(url);
+  viewerImageCache.set(url, entry);
+  entry.inUse = true;
+  viewerActiveImageKey = url;
+  return entry.img;
+}
+
+function registerViewerImage(url, img) {
+  if (!url || !img) return null;
+  let entry = viewerImageCache.get(url);
+  if (entry && entry.img !== img) {
+    viewerImageCache.delete(url);
+    viewerImageCacheBytes = Math.max(
+      0,
+      viewerImageCacheBytes - (Number(entry.bytes) || 0),
+    );
+    if (!entry.inUse) discardViewerImage(entry.img);
+    entry = null;
+  }
+  if (!entry) {
+    entry = { img, bytes: viewerImageBytes(img), inUse: true };
+    viewerImageCache.set(url, entry);
+    viewerImageCacheBytes += entry.bytes;
+  } else {
+    viewerImageCache.delete(url);
+    viewerImageCache.set(url, entry);
+    entry.inUse = true;
+  }
+  viewerActiveImageKey = url;
+  trimViewerImageCache();
+  return img;
+}
+
+function syncActiveViewerImageBytes(img) {
+  const entry = viewerActiveImageKey
+    ? viewerImageCache.get(viewerActiveImageKey)
+    : null;
+  if (!entry || entry.img !== img) return;
+  const bytes = viewerImageBytes(img);
+  if (bytes === entry.bytes) return;
+  viewerImageCacheBytes = Math.max(
+    0,
+    viewerImageCacheBytes - (Number(entry.bytes) || 0) + bytes,
+  );
+  entry.bytes = bytes;
+  trimViewerImageCache();
+}
+
+function releaseActiveViewerImage({ trim = true } = {}) {
+  const entry = viewerActiveImageKey
+    ? viewerImageCache.get(viewerActiveImageKey)
+    : null;
+  if (entry) entry.inUse = false;
+  viewerActiveImageKey = "";
+  if (trim) trimViewerImageCache();
+}
+
+function viewerImageWarmTargets() {
+  const targets = [];
+  const seen = new Set(viewerActiveImageKey ? [viewerActiveImageKey] : []);
+  for (let distance = 1; distance <= VIEWER_IMAGE_WARM_RADIUS; distance += 1) {
+    for (const direction of [1, -1]) {
+      const index = viewerIndex + direction * distance;
+      if (index < 0 || index >= state.items.length) continue;
+      const item = state.items[index];
+      if (!item || item.kind === "video") continue;
+      const url = viewItemUrl(item);
+      if (seen.has(url)) continue;
+      seen.add(url);
+      targets.push(url);
+    }
+  }
+  return targets;
+}
+
+function cancelViewerImageWarmJob(job) {
+  if (!job || job.cancelled) return;
+  job.cancelled = true;
+  clearTimeout(job.timer);
+  viewerImageWarmJobs.delete(job.url);
+  discardViewerImage(job.img);
+}
+
+function stopViewerImageWarm() {
+  clearTimeout(viewerImageWarmTimer);
+  viewerImageWarmTimer = 0;
+  viewerImageWarmQueue.length = 0;
+  for (const job of [...viewerImageWarmJobs.values()]) {
+    cancelViewerImageWarmJob(job);
+  }
+}
+
+function pumpViewerImageWarm() {
+  if (
+    $("#viewer")?.hidden ||
+    $("#viewer")?.classList.contains("is-closing") ||
+    document.hidden
+  ) {
+    stopViewerImageWarm();
+    return;
+  }
+  while (
+    viewerImageWarmJobs.size < VIEWER_IMAGE_WARM_CONCURRENCY &&
+    viewerImageWarmQueue.length
+  ) {
+    const url = viewerImageWarmQueue.shift();
+    if (
+      !url ||
+      url === viewerActiveImageKey ||
+      viewerImageCache.has(url) ||
+      viewerImageWarmJobs.has(url)
+    ) {
+      continue;
+    }
+    const img = new Image();
+    img.decoding = "async";
+    img.fetchPriority = "low";
+    const job = {
+      url,
+      img,
+      cancelled: false,
+      timer: 0,
+    };
+    const finish = () => {
+      if (job.cancelled) return;
+      clearTimeout(job.timer);
+      viewerImageWarmJobs.delete(url);
+      pumpViewerImageWarm();
+    };
+    img.onload = () => {
+      const decoded =
+        typeof img.decode === "function"
+          ? img.decode().catch(() => {})
+          : Promise.resolve();
+      decoded.then(() => {
+        if (job.cancelled || !viewerImageWarmTargets().includes(url)) {
+          finish();
+          return;
+        }
+        keepViewerImage(url, img);
+        finish();
+      });
+    };
+    img.onerror = finish;
+    job.timer = window.setTimeout(() => {
+      cancelViewerImageWarmJob(job);
+      pumpViewerImageWarm();
+    }, VIEWER_IMAGE_WARM_TIMEOUT_MS);
+    viewerImageWarmJobs.set(url, job);
+    img.src = url;
+  }
+}
+
+function retargetViewerImageWarm() {
+  viewerImageWarmTimer = 0;
+  if ($("#viewer")?.hidden || $("#viewer")?.classList.contains("is-closing")) {
+    stopViewerImageWarm();
+    return;
+  }
+  const targets = viewerImageWarmTargets();
+  const desired = new Set(targets);
+  for (const job of [...viewerImageWarmJobs.values()]) {
+    if (!desired.has(job.url)) cancelViewerImageWarmJob(job);
+  }
+  viewerImageWarmQueue = targets.filter(
+    (url) => !viewerImageCache.has(url) && !viewerImageWarmJobs.has(url),
+  );
+  pumpViewerImageWarm();
+}
+
+function scheduleViewerImageWarm(delay = VIEWER_IMAGE_WARM_DELAY_MS) {
+  if (viewerImageWarmTimer) return;
+  viewerImageWarmTimer = window.setTimeout(
+    retargetViewerImageWarm,
+    Math.max(0, Number(delay) || 0),
+  );
+}
+
+/* 查看器可能通过底部胶片直接跳到很远的一张。关闭时会落到那一格，
+   所以停留稍久后把返回位置附近的 L0、标准网格图和已解码节点也备好。
+   这样从大图缩回网格时，落点照片已经在 DOM 池里，不会先闪一块骨架。 */
+const VIEWER_RETURN_GRID_RADIUS = 8;
+const VIEWER_RETURN_GRID_DELAY_MS = 140;
+let viewerReturnGridWarmTimer = 0;
+let viewerReturnGridWarmSeq = 0;
+
+function stopViewerReturnGridWarm() {
+  clearTimeout(viewerReturnGridWarmTimer);
+  viewerReturnGridWarmTimer = 0;
+  viewerReturnGridWarmSeq += 1;
+}
+
+async function warmViewerReturnGrid(seq) {
+  if (
+    seq !== viewerReturnGridWarmSeq ||
+    $("#viewer")?.hidden ||
+    !canZoomGallery()
+  ) {
+    return;
+  }
+  const center = viewerIndex;
+  const first = Math.max(0, center - VIEWER_RETURN_GRID_RADIUS);
+  const last = Math.min(
+    state.items.length - 1,
+    center + VIEWER_RETURN_GRID_RADIUS,
+  );
+  const items = state.items.slice(first, last + 1);
+  if (!items.length) return;
+  const orderedItems = [
+    state.items[center],
+    ...items.filter((item) => item?.id !== state.items[center]?.id),
+  ].filter(Boolean);
+  const size = galleryThumbSizeForZoom();
+  const standardUrls = orderedItems.map((item) =>
+    itemThumbUrl(item, size, "inside"),
+  );
+  const lowResUrls = orderedItems.map((item) => thumbLowResUrl(item));
+  await Promise.all([
+    preloadGalleryAtlasPagesForItems(items),
+    preloadImageUrls(standardUrls, {
+      timeout: 4000,
+      concurrency: 4,
+      onLoaded: (img, url) => thumbPoolKeep(url, img),
+    }),
+    preloadImageUrls(lowResUrls, {
+      timeout: 4000,
+      concurrency: 4,
+      onLoaded: (img, url) => thumbLowResKeep(url, img),
+    }),
+  ]).catch(() => {});
+}
+
+function scheduleViewerReturnGridWarm(delay = VIEWER_RETURN_GRID_DELAY_MS) {
+  stopViewerReturnGridWarm();
+  const seq = viewerReturnGridWarmSeq;
+  viewerReturnGridWarmTimer = window.setTimeout(
+    () => {
+      viewerReturnGridWarmTimer = 0;
+      void warmViewerReturnGrid(seq);
+    },
+    Math.max(0, Number(delay) || 0),
+  );
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopViewerImageWarm();
+    stopViewerReturnGridWarm();
+    trimViewerImageCache(Math.floor(VIEWER_IMAGE_CACHE_BUDGET / 4));
+    return;
+  }
+  if (!$("#viewer")?.hidden) {
+    scheduleViewerImageWarm(0);
+    scheduleViewerReturnGridWarm(0);
+  }
+});
+
 function showViewerItem(opts = {}) {
   const item = state.items[viewerIndex];
   if (!item) return;
+  releaseActiveViewerImage({ trim: false });
   cancelViewerLiveAutoplay();
   stopLiveMotion();
   if (viewerDateOpen) closeViewerDate({ immediate: true });
@@ -35456,7 +38258,17 @@ function showViewerItem(opts = {}) {
         { once: true },
       );
     }
-    const image = stage.querySelector("#viewerPhoto > img");
+    let image = stage.querySelector("#viewerPhoto > img");
+    const cachedImage = takeViewerImage(viewItemUrl(item));
+    if (cachedImage) {
+      cachedImage.alt = "";
+      cachedImage.draggable = false;
+      cachedImage.decoding = "async";
+      image.replaceWith(cachedImage);
+      image = cachedImage;
+    } else {
+      registerViewerImage(viewItemUrl(item), image);
+    }
     const poster = stage.querySelector(".viewer-photo-poster");
     const loadingMark = stage.querySelector(".viewer-photo-loading");
     const retryBtn = stage.querySelector(".viewer-photo-retry");
@@ -35473,6 +38285,7 @@ function showViewerItem(opts = {}) {
     const syncViewerPhotoLoadState = () => {
       if (!stillCurrent()) return;
       const ready = fullDecoded();
+      if (ready) syncActiveViewerImageBytes(image);
       loadingMark.hidden = ready || posterDecoded();
       if (!ready) return;
       retryBtn.hidden = true;
@@ -35593,8 +38406,7 @@ function showViewerItem(opts = {}) {
   $("#viewerTitle").textContent = item.name;
   $("#viewerInfo").innerHTML = infoHTML(item);
   if (viewerInfoOpen) updateViewerInfoPopover(item);
-  $("#viewerCounter").textContent =
-    `${viewerIndex + 1} / ${state.items.length}`;
+  $("#viewerCounter").textContent = `${viewerIndex + 1}/${state.items.length}`;
   syncViewerFavorite(item);
   syncViewerRating(item);
   $("#viewer").classList.toggle("has-multi", state.items.length > 1);
@@ -35613,6 +38425,9 @@ function showViewerItem(opts = {}) {
     showPhotoWallCrop(item);
   }
   void refreshViewerEditButton(item);
+  trimViewerImageCache();
+  scheduleViewerImageWarm();
+  scheduleViewerReturnGridWarm();
 }
 
 /* 视频封面层上的两样小东西：底部暗角和时长；不再生成播放三角。
@@ -36006,19 +38821,12 @@ function stepViewer(delta) {
   transitionViewerItem(next);
 }
 
-function syncViewerFavorite(
-  item = state.items[viewerIndex],
-  { pop = false } = {},
-) {
+function syncViewerFavorite(item = state.items[viewerIndex]) {
   const el = $("#viewerFavorite");
   if (!el) return;
   el.hidden = !item?.favorite;
   if (item?.favorite && !el.firstElementChild)
     el.innerHTML = ICON_FAVORITE_LINE;
-  if (!pop) return;
-  el.classList.remove("is-just-toggled");
-  void el.offsetWidth;
-  el.classList.add("is-just-toggled");
 }
 
 /* 大图里改了收藏，背后的网格也立刻换掉这颗爱心；不用整页重绘，
@@ -36061,7 +38869,7 @@ async function toggleViewerFavorite() {
   favoriteInFlight = true;
   try {
     const changed = await saveFavorite([item.id], makeFavorite);
-    syncViewerFavorite(item, { pop: true });
+    syncViewerFavorite(item);
     syncFavoriteTile(item);
     if (state.activeId === "favorites" && !makeFavorite && changed.size) {
       viewerNeedsFavoritesRefresh = true;
@@ -36480,6 +39288,10 @@ function closeViewer({ immediate = false } = {}) {
   if (photoEditorOpen) return;
   const viewer = $("#viewer");
   if (viewer.hidden || viewer.classList.contains("is-closing")) return;
+  stopViewerImageWarm();
+  stopViewerReturnGridWarm();
+  releaseActiveViewerImage({ trim: false });
+  scheduleOrdinarySurfaceRecovery({ delay: 320 });
   const openedItemId = viewerOpenedItemId;
   viewerOpenedItemId = null;
   $("#viewerFilmstrip").hidden = true;
@@ -36973,19 +39785,22 @@ $("#viewerStage").addEventListener("pointermove", (e) => {
   const dx = e.clientX - drag.x;
   const dy = e.clientY - drag.y;
   if (Math.hypot(dx, dy) > 3) viewerDragged = true;
-  viewerPanX = drag.panX + dx;
-  viewerPanY = drag.panY + dy;
+  const limits = viewerPanLimits(drag.surface);
+  viewerPanX = rubberBandViewerPan(drag.panX + dx, limits.x);
+  viewerPanY = rubberBandViewerPan(drag.panY + dy, limits.y);
   applyViewerZoom();
 });
 
 function endViewerDrag(e) {
   const drag = viewerDrag;
   if (!drag || (e.pointerId != null && e.pointerId !== drag.pointerId)) return;
+  clampViewerPanToBounds(drag.surface);
   drag.surface?.classList.remove("is-panning");
   try {
     drag.captureEl?.releasePointerCapture(drag.pointerId);
   } catch {}
   viewerDrag = null;
+  applyViewerZoom();
   if (viewerDragged)
     setTimeout(() => {
       viewerDragged = false;
@@ -38538,7 +41353,7 @@ function contextItemInfoHTML(item) {
       const footer = document.createElement("div");
       footer.className = "context-info-map-footer";
       footer.dataset.contextLocationAdjust = "";
-      footer.title = "调整项目位置";
+      footer.setAttribute("aria-label", "调整项目位置");
       const label = document.createElement("span");
       label.className = "context-info-map-label";
       label.textContent =
@@ -40853,6 +43668,15 @@ function handleGalleryContentScroll() {
   galleryContentScrollEndTimer = setTimeout(() => {
     galleryContentScrollEndTimer = 0;
     root.classList.remove("gallery-is-scrolling");
+    /* 小档滚动中故意延后的高清层，在停下后补一次可见区扫描。 */
+    scheduleVisibleGalleryImageSweep();
+    if (canZoomGallery()) {
+      rememberThumbDecodeViewport();
+      if (thumbPrefetchAlive()) {
+        retargetThumbPrefetch({ settled: true });
+        if (!thumbPrefetchInFlight) scheduleThumbPrefetch(0);
+      }
+    }
   }, 110);
   if (galleryContentScrollFrame) return;
   galleryContentScrollFrame = requestAnimationFrame(() => {
@@ -40929,6 +43753,431 @@ window.addEventListener("pointerout", (e) => {
     backToTopMouseNear = false;
     syncBackToTop();
   }
+});
+
+/* 顶栏和选择底栏的左右控件各自感知鼠标距离。两组状态完全独立：
+   靠近左侧只改变左侧，靠近右侧只改变右侧；鼠标回到中间内容区后恢复。 */
+/* 四个角落使用固定大热区，不再跟随按钮尺寸计算。 */
+const CORNER_MATERIAL_ENTER_REACH_PX = 4;
+const CORNER_MATERIAL_EXIT_REACH_PX = 28;
+const CORNER_MATERIAL_EXIT_DELAY_MS = 110;
+const CORNER_MATERIAL_PADDING_PX = 42;
+const cornerMaterialClasses = Object.freeze({
+  toolbarLeft: "toolbar-left-material-near",
+  toolbarRight: "toolbar-right-material-near",
+  selectionLeft: "selection-left-material-near",
+  selectionRight: "selection-right-material-near",
+});
+const cornerMaterialState = {
+  toolbarLeft: false,
+  toolbarRight: false,
+  selectionLeft: false,
+  selectionRight: false,
+};
+const cornerMaterialExitTimers = {
+  toolbarLeft: 0,
+  toolbarRight: 0,
+  selectionLeft: 0,
+  selectionRight: 0,
+};
+let cornerMaterialPointerX = Number.NaN;
+let cornerMaterialPointerY = Number.NaN;
+let cornerMaterialFrame = 0;
+
+function pointerWithinCornerMaterialReach(
+  x,
+  y,
+  rect,
+  reach = CORNER_MATERIAL_ENTER_REACH_PX,
+) {
+  return (
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    Boolean(rect) &&
+    rect.width > 0 &&
+    rect.height > 0 &&
+    x >= rect.left - reach &&
+    x <= rect.right + reach &&
+    y >= rect.top - reach &&
+    y <= rect.bottom + reach
+  );
+}
+
+function cornerMaterialRect(left, top, right, bottom) {
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+function cornerMaterialUnion(...rects) {
+  const valid = rects.filter(
+    (rect) => rect && rect.width > 0 && rect.height > 0,
+  );
+  if (!valid.length) return null;
+  return cornerMaterialRect(
+    Math.min(...valid.map((rect) => rect.left)),
+    Math.min(...valid.map((rect) => rect.top)),
+    Math.max(...valid.map((rect) => rect.right)),
+    Math.max(...valid.map((rect) => rect.bottom)),
+  );
+}
+
+function cornerMaterialLayoutAnchor(root, selector, originRect) {
+  if (!root || !originRect) return null;
+  const controls = [...root.querySelectorAll(selector)].filter(
+    (element) =>
+      !element.hidden &&
+      !element.closest("[hidden]") &&
+      element.offsetWidth > 0 &&
+      element.offsetHeight > 0,
+  );
+  if (!controls.length) return null;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const control of controls) {
+    left = Math.min(left, control.offsetLeft);
+    top = Math.min(top, control.offsetTop);
+    right = Math.max(right, control.offsetLeft + control.offsetWidth);
+    bottom = Math.max(bottom, control.offsetTop + control.offsetHeight);
+  }
+  return cornerMaterialRect(
+    originRect.left + left,
+    originRect.top + top,
+    originRect.left + right,
+    originRect.top + bottom,
+  );
+}
+
+function expandCornerMaterialZone(anchor, bounds) {
+  if (!anchor || !bounds) return null;
+  return cornerMaterialRect(
+    Math.max(bounds.left, anchor.left - CORNER_MATERIAL_PADDING_PX),
+    Math.max(bounds.top, anchor.top - CORNER_MATERIAL_PADDING_PX),
+    Math.min(bounds.right, anchor.right + CORNER_MATERIAL_PADDING_PX),
+    Math.min(bounds.bottom, anchor.bottom + CORNER_MATERIAL_PADDING_PX),
+  );
+}
+
+let mapRailMaterialDoc = null;
+let mapRailMaterialObserver = null;
+let mapRailMaterialSatellite = null;
+let mapRailMaterialSignature = "";
+
+function activeMapMaterialDocument() {
+  if (isAlbumMapView()) return albumMapFrame()?.contentDocument || null;
+  if (state.activeId === "locations" && state.locationSubview === "map") {
+    return locationsMapFrame()?.contentDocument || null;
+  }
+  return null;
+}
+
+function stopMapRailMaterialSync() {
+  mapRailMaterialObserver?.disconnect();
+  mapRailMaterialObserver = null;
+  mapRailMaterialDoc = null;
+  mapRailMaterialSatellite = null;
+  mapRailMaterialSignature = "";
+  const rail = $("#sidebarRailBtn");
+  if (rail) {
+    for (const property of [
+      "--map-rail-control-background",
+      "--map-rail-control-backdrop",
+      "--map-rail-control-shadow",
+      "--map-rail-control-color",
+    ]) {
+      rail.style.removeProperty(property);
+    }
+  }
+  document.documentElement.classList.remove("map-satellite-control-material");
+}
+
+function visibleMapMaterialReference(doc) {
+  const controls = [
+    ...doc.querySelectorAll(
+      ".globe-type-toggle, .globe-compass-button, .globe-close-button",
+    ),
+  ].filter((control) => {
+    if (control.hidden || control.closest("[hidden]")) return false;
+    const rect = control.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  });
+  return controls.find((control) => !control.matches(":hover")) || controls[0];
+}
+
+function syncMapRailMaterial(doc = activeMapMaterialDocument()) {
+  const rail = $("#sidebarRailBtn");
+  if (!doc?.documentElement || !doc.body) {
+    stopMapRailMaterialSync();
+    return;
+  }
+  if (doc !== mapRailMaterialDoc) {
+    mapRailMaterialObserver?.disconnect();
+    mapRailMaterialDoc = doc;
+    mapRailMaterialSatellite = null;
+    mapRailMaterialSignature = "";
+    if (typeof MutationObserver === "function") {
+      mapRailMaterialObserver = new MutationObserver(() => {
+        if (mapRailMaterialDoc === doc) syncMapRailMaterial(doc);
+      });
+      mapRailMaterialObserver.observe(doc.body, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    }
+  }
+  const satellite = doc.body.classList.contains("is-satellite");
+  if (satellite !== mapRailMaterialSatellite) {
+    mapRailMaterialSatellite = satellite;
+    document.documentElement.classList.toggle(
+      "map-satellite-control-material",
+      satellite,
+    );
+  }
+  const reference = visibleMapMaterialReference(doc);
+  if (!rail || !reference) return;
+  const style = getComputedStyle(reference);
+  const values = {
+    "--map-rail-control-background": style.backgroundColor,
+    "--map-rail-control-backdrop":
+      style.backdropFilter || style.webkitBackdropFilter || "none",
+    "--map-rail-control-shadow": style.boxShadow,
+    "--map-rail-control-color": style.color,
+  };
+  const signature = [satellite, ...Object.values(values)].join("|");
+  if (signature === mapRailMaterialSignature) return;
+  mapRailMaterialSignature = signature;
+  for (const [property, value] of Object.entries(values)) {
+    if (value) rail.style.setProperty(property, value);
+    else rail.style.removeProperty(property);
+  }
+}
+
+function cornerMaterialHitZones() {
+  const main = $(".main");
+  const leftZone = $("#toolbarLeftZone");
+  const rightZone = $("#toolbarRightZone");
+  const selectionBar = $("#selbar");
+  const sidebarRail = $("#sidebarRailBtn");
+  const mainRect = main?.getBoundingClientRect();
+  const viewportWidth =
+    document.documentElement.clientWidth || window.innerWidth || 0;
+  const viewportHeight =
+    document.documentElement.clientHeight || window.innerHeight || 0;
+  if (!mainRect || mainRect.width <= 0 || viewportWidth <= 0) return null;
+
+  const mainLeft = Math.max(0, mainRect.left);
+  const mainRight = Math.min(viewportWidth, mainRect.right);
+  const mainWidth = Math.max(0, mainRight - mainLeft);
+  if (mainWidth <= 0) return null;
+
+  const mainTop = Math.max(0, mainRect.top);
+  const mainBottom = Math.min(viewportHeight, mainRect.bottom);
+  const topBounds = cornerMaterialRect(
+    mainLeft,
+    mainTop,
+    mainRight,
+    Math.min(mainBottom, mainTop + 190),
+  );
+  const toolbarLeftBounds = cornerMaterialRect(
+    0,
+    mainTop,
+    mainRight,
+    Math.min(mainBottom, mainTop + 190),
+  );
+  const selectionHeight = selectionBar?.offsetHeight || 44;
+  const selectionLayoutRect = cornerMaterialRect(
+    mainLeft,
+    Math.max(mainTop, mainBottom - selectionHeight),
+    mainRight,
+    mainBottom,
+  );
+  const bottomBounds = cornerMaterialRect(
+    mainLeft,
+    Math.max(mainTop, mainBottom - selectionHeight - 70),
+    mainRight,
+    mainBottom,
+  );
+  const sidebarRailRect = sidebarRail?.getBoundingClientRect();
+  const sidebarRailAnchor =
+    sidebarRailRect && sidebarRailRect.width > 0 && sidebarRailRect.height > 0
+      ? cornerMaterialRect(
+          sidebarRailRect.left,
+          sidebarRailRect.top,
+          sidebarRailRect.right,
+          sidebarRailRect.bottom,
+        )
+      : null;
+  const toolbarLeftAnchor = cornerMaterialUnion(
+    cornerMaterialLayoutAnchor(
+      leftZone,
+      ":scope > :not([hidden])",
+      leftZone?.getBoundingClientRect(),
+    ),
+    sidebarRailAnchor,
+  );
+  const toolbarRightAnchor = cornerMaterialLayoutAnchor(
+    rightZone,
+    ":scope > :not([hidden])",
+    rightZone?.getBoundingClientRect(),
+  );
+  const selectionLeftAnchor = cornerMaterialLayoutAnchor(
+    selectionBar,
+    ":scope > :is(#shareBtn, #trashDelSelBtn):not([hidden])",
+    selectionLayoutRect,
+  );
+  const selectionRightAnchor = cornerMaterialLayoutAnchor(
+    selectionBar,
+    ":scope > :is(#trashSelBtn, #trashRestoreSelBtn, #numberingDoneBtn):not([hidden])",
+    selectionLayoutRect,
+  );
+
+  return {
+    toolbarLeft: expandCornerMaterialZone(toolbarLeftAnchor, toolbarLeftBounds),
+    toolbarRight: expandCornerMaterialZone(toolbarRightAnchor, topBounds),
+    selectionLeft: expandCornerMaterialZone(selectionLeftAnchor, bottomBounds),
+    selectionRight: expandCornerMaterialZone(
+      selectionRightAnchor,
+      bottomBounds,
+    ),
+  };
+}
+
+function commitCornerMaterialState(key, nextActive) {
+  const className = cornerMaterialClasses[key];
+  if (nextActive) {
+    window.clearTimeout(cornerMaterialExitTimers[key]);
+    cornerMaterialExitTimers[key] = 0;
+    if (cornerMaterialState[key]) return;
+    cornerMaterialState[key] = true;
+    document.documentElement.classList.add(className);
+    return;
+  }
+  if (!cornerMaterialState[key] || cornerMaterialExitTimers[key]) return;
+  /* 离开稳定范围后再等一个很短的时间；期间重新靠近会直接取消恢复。 */
+  cornerMaterialExitTimers[key] = window.setTimeout(() => {
+    cornerMaterialExitTimers[key] = 0;
+    if (cornerMaterialState[key] === false) return;
+    cornerMaterialState[key] = false;
+    document.documentElement.classList.remove(className);
+  }, CORNER_MATERIAL_EXIT_DELAY_MS);
+}
+
+function applyCornerMaterialState() {
+  cornerMaterialFrame = 0;
+  const materialEnabled = document.documentElement.classList.contains(
+    "transparent-titlebar",
+  );
+  if (!materialEnabled) {
+    for (const key of Object.keys(cornerMaterialClasses)) {
+      window.clearTimeout(cornerMaterialExitTimers[key]);
+      cornerMaterialExitTimers[key] = 0;
+      cornerMaterialState[key] = false;
+      document.documentElement.classList.remove(cornerMaterialClasses[key]);
+    }
+    return;
+  }
+  const selectionBar = $("#selbar");
+  const selectionVisible =
+    Boolean(selectionBar) &&
+    !selectionBar.hidden &&
+    !selectionBar.classList.contains("is-collapsed");
+  const menuPinsRightTop =
+    menuOpen && Boolean(menuAnchorBtn?.closest("#toolbarRightZone"));
+  const pickerPinsSelectionLeft = Boolean($("#picker")) && !$("#picker").hidden;
+  const hasPointer =
+    Number.isFinite(cornerMaterialPointerX) &&
+    Number.isFinite(cornerMaterialPointerY);
+  const zones = cornerMaterialHitZones();
+  const toolbarLeftReach = cornerMaterialState.toolbarLeft
+    ? CORNER_MATERIAL_EXIT_REACH_PX
+    : CORNER_MATERIAL_ENTER_REACH_PX;
+  const toolbarRightReach = cornerMaterialState.toolbarRight
+    ? CORNER_MATERIAL_EXIT_REACH_PX
+    : CORNER_MATERIAL_ENTER_REACH_PX;
+  const selectionLeftReach = cornerMaterialState.selectionLeft
+    ? CORNER_MATERIAL_EXIT_REACH_PX
+    : CORNER_MATERIAL_ENTER_REACH_PX;
+  const selectionRightReach = cornerMaterialState.selectionRight
+    ? CORNER_MATERIAL_EXIT_REACH_PX
+    : CORNER_MATERIAL_ENTER_REACH_PX;
+  const nextState = {
+    toolbarLeft:
+      hasPointer &&
+      pointerWithinCornerMaterialReach(
+        cornerMaterialPointerX,
+        cornerMaterialPointerY,
+        zones?.toolbarLeft,
+        toolbarLeftReach,
+      ),
+    toolbarRight:
+      menuPinsRightTop ||
+      (hasPointer &&
+        pointerWithinCornerMaterialReach(
+          cornerMaterialPointerX,
+          cornerMaterialPointerY,
+          zones?.toolbarRight,
+          toolbarRightReach,
+        )),
+    selectionLeft:
+      selectionVisible &&
+      (pickerPinsSelectionLeft ||
+        (hasPointer &&
+          pointerWithinCornerMaterialReach(
+            cornerMaterialPointerX,
+            cornerMaterialPointerY,
+            zones?.selectionLeft,
+            selectionLeftReach,
+          ))),
+    selectionRight:
+      selectionVisible &&
+      hasPointer &&
+      pointerWithinCornerMaterialReach(
+        cornerMaterialPointerX,
+        cornerMaterialPointerY,
+        zones?.selectionRight,
+        selectionRightReach,
+      ),
+  };
+  for (const key of Object.keys(cornerMaterialClasses)) {
+    const nextActive = nextState[key] === true;
+    commitCornerMaterialState(key, nextActive);
+  }
+}
+
+function scheduleCornerMaterialSync() {
+  if (cornerMaterialFrame) return;
+  cornerMaterialFrame = requestAnimationFrame(applyCornerMaterialState);
+}
+
+window.addEventListener(
+  "pointermove",
+  (event) => {
+    cornerMaterialPointerX = event.clientX;
+    cornerMaterialPointerY = event.clientY;
+    scheduleCornerMaterialSync();
+  },
+  { passive: true },
+);
+window.addEventListener("pointerout", (event) => {
+  if (event.relatedTarget) return;
+  cornerMaterialPointerX = Number.NaN;
+  cornerMaterialPointerY = Number.NaN;
+  scheduleCornerMaterialSync();
+});
+window.addEventListener("blur", () => {
+  cornerMaterialPointerX = Number.NaN;
+  cornerMaterialPointerY = Number.NaN;
+  scheduleCornerMaterialSync();
+});
+window.addEventListener("resize", scheduleCornerMaterialSync, {
+  passive: true,
 });
 
 function scrollContentToTop() {
@@ -41175,7 +44424,7 @@ function handleViewerKey(e, target) {
     state.items[viewerIndex]?.kind === "photo"
   ) {
     e.preventDefault();
-    void saveViewerRating(Number(key));
+    void saveViewerRating(Number(key), { pop: false });
     return;
   }
   if (key === "?") {
@@ -41489,7 +44738,7 @@ document.addEventListener("keydown", (e) => {
       filmstripCurrentItem()?.kind === "photo"
     ) {
       e.preventDefault();
-      void saveFilmstripRating(Number(key));
+      void saveFilmstripRating(Number(key), { pop: false });
       return;
     }
     if (key === "Home" || key === "End") {
@@ -41661,15 +44910,142 @@ localStorage.removeItem(ACTIVE_VIEW_KEY);
 /* 每次启动按设置里的“默认打开”恢复视图；默认打开「图库」。
    没有根目录时必须停留在「图库」展示导入提示；相簿被删掉或读取失败时
    才退回「所有相簿」。 */
+function recoveryAlbumIds(snapshot, fallback = null) {
+  const ids = Array.isArray(snapshot?.photoWallPlayback?.albumIds)
+    ? snapshot.photoWallPlayback.albumIds
+    : [];
+  const valid = ids.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+  if (valid.length) return [...new Set(valid)];
+  const fallbackId = Number(fallback);
+  return Number.isInteger(fallbackId) && fallbackId > 0 ? [fallbackId] : null;
+}
+
+async function restorePhotoWallFromRecovery(snapshot) {
+  const playback = snapshot?.photoWallPlayback;
+  if (!playback) return false;
+  const wallKind = ["tile", "masonry", "filmroll", "mosaic"].includes(
+    playback.wallKind,
+  )
+    ? playback.wallKind
+    : "tile";
+  const activeId = snapshot.activeId;
+  const albumIds = recoveryAlbumIds(snapshot);
+  const selectionMode = albumIds?.length
+    ? playback.mode === "albums"
+      ? "albums-some"
+      : "photos-some"
+    : playback.mode === "albums"
+      ? "albums-all"
+      : "photos-all";
+
+  if (activeId === "photoWall") {
+    await loadPhotoWallAlbums();
+    if (wallKind === "masonry") {
+      return startMasonryWallPlayback(selectionMode, albumIds);
+    }
+    if (wallKind === "filmroll") {
+      return startFilmrollWallPlayback(selectionMode, albumIds);
+    }
+    if (wallKind === "mosaic") {
+      return startMosaicWallPlayback(selectionMode, albumIds);
+    }
+    return startPhotoWallPlayback(selectionMode, albumIds);
+  }
+
+  if (Number.isInteger(Number(activeId)) && albumById(activeId)) {
+    if (wallKind === "masonry") return startCurrentMasonryWall();
+    if (wallKind === "filmroll") return startCurrentFilmrollWall();
+    if (wallKind === "mosaic") return startCurrentMosaicWall();
+    return startCurrentPhotoWallAlbumPlayback();
+  }
+
+  if (activeId === "library") {
+    if (wallKind === "masonry") return startCurrentMasonryWall();
+    if (wallKind === "filmroll") return startCurrentFilmrollWall();
+    if (wallKind === "mosaic") return startCurrentMosaicWall();
+    setPhotoWall(true);
+    return state.photoWall === true;
+  }
+  return false;
+}
+
+function restoreSlideshowFromRecovery(snapshot) {
+  const saved = snapshot?.slideshow;
+  if (!saved?.active) return false;
+  const items = photoWallCandidates(state.items);
+  if (!items.length) return false;
+  const currentPhotoId = Number(saved.currentPhotoId);
+  return (
+    window.albumSlideshow?.open?.({
+      items,
+      title: saved.title || "幻灯片",
+      startPhotoId:
+        Number.isInteger(currentPhotoId) && currentPhotoId > 0
+          ? currentPhotoId
+          : null,
+      startPaused: true,
+    }) === true
+  );
+}
+
+async function restoreRecoveredPresentation() {
+  const snapshot = pendingRecoverySnapshot;
+  pendingRecoverySnapshot = null;
+  if (!snapshot) {
+    if (recoveryPlaybackSuppressed) {
+      setTimeout(
+        () => toast(uiText("上次播放视图未能稳定恢复，已安全返回")),
+        180,
+      );
+    }
+    recoveryPlaybackSuppressed = false;
+    return false;
+  }
+  if (snapshot.photoWallPlayback) {
+    try {
+      return await restorePhotoWallFromRecovery(snapshot);
+    } catch {
+      return false;
+    }
+  }
+  if (snapshot.slideshow?.active) {
+    try {
+      return restoreSlideshowFromRecovery(snapshot);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function restoreActiveView() {
   /* 渲染进程崩溃恢复重载：回到崩溃前视图，不掉回默认图库。 */
-  const recover =
-    new URLSearchParams(location.search).get("fotora_recover") === "1";
+  const recoveryParams = new URLSearchParams(location.search);
+  const recover = recoveryParams.get("fotora_recover") === "1";
+  const recoveryAttempt = Math.max(
+    1,
+    Number(recoveryParams.get("fotora_recover_attempt")) || 1,
+  );
+  const recoveryReason = String(
+    recoveryParams.get("fotora_recover_reason") || "",
+  );
   if (recover) {
+    recoveryPlaybackSuppressed =
+      recoveryAttempt > 1 || recoveryReason === "oom";
+    pendingRecoverySnapshot = null;
     try {
       history.replaceState(null, "", location.pathname + location.hash);
     } catch {}
     const snap = readLastViewSnapshot();
+    if (
+      recoveryPlaybackSuppressed &&
+      (snap?.photoWallPlayback || snap?.slideshow)
+    ) {
+      recoveryPlaybackSuppressed = true;
+    } else {
+      pendingRecoverySnapshot = snap || null;
+    }
+    clearPhotoWallPendingEntry();
     if (snap && snap.activeId && state.roots.length) {
       state.locationSubview = snap.locationSubview || state.locationSubview;
       state.albumMapOpen = false;
@@ -41847,40 +45223,17 @@ let startupCoverSyncStarted = false;
 async function syncCoversAfterOpen() {
   if (startupCoverSyncStarted) return;
   startupCoverSyncStarted = true;
+  if (state.rootImport || !activeLibraryIsBrowsable()) return;
   let applied = false;
   try {
     const res = await api("/api/covers/refresh", { method: "POST" });
     if (!res.changed) return;
-    /* 用户已经开始选择 / 看大图 / 拖相簿时先别换，等这轮交互结束再走正常的自动刷新。 */
-    if (
-      state.select ||
-      !$("#viewer").hidden ||
-      galleryZoomBusy ||
-      albumGesture ||
-      albumSettling
-    ) {
-      pendingUpdate = true;
+    /* 用户已经开始交互时先记下，退出当前界面后由统一刷新器接手。 */
+    if (shouldDeferLiveRefresh()) {
+      markPendingExternalUpdate();
       return;
     }
-    await preloadCoverThumbs(res.state);
-    const scrollTop = $("#content").scrollTop;
-    applyState(res.state);
-    if (state.activeId === "locations") {
-      await reloadActiveCollection();
-    } else if (state.activeId === "trash") {
-      await loadTrash();
-    } else if (state.activeId === "library") {
-      await loadLibrary();
-    } else if (state.activeId === "favorites") {
-      await loadFavorites();
-    } else if (state.activeId !== "all" && albumById(state.activeId)) {
-      await loadAlbum(state.activeId, { quiet: true });
-    } else if (state.activeId !== "all") {
-      fallbackToAllAlbums();
-    }
-    render();
-    $("#content").scrollTop = scrollTop;
-    applied = true;
+    applied = await applyExternalUpdate();
   } catch {
     /* 后台检查失败就保持上次的封面，下次打开再试。 */
   } finally {
@@ -41916,6 +45269,7 @@ function dismissStartupScreen({ immediate = false } = {}) {
 
 function showWindowWithInterface() {
   document.documentElement.classList.remove("app-initializing");
+  document.documentElement.classList.remove("app-recovering");
   dismissStartupScreen({ immediate: true });
   window.albumWindow?.showWhenReady?.();
   progressivePhotoGridReady = true;
@@ -42051,16 +45405,13 @@ window.addEventListener("resize", scheduleWindowCardClip);
   setStartupStatus("正在准备首屏…");
   render();
   restoreCollectionScroll();
-  if (!photoWallLibraryRailIsLocked()) {
-    const storedSidebarRailCollapsed = readSidebarRailCollapsed();
-    if (
-      hoverExpandSidebar ||
-      (storedSidebarRailCollapsed ?? state.roots.length === 0)
-    ) {
-      setSidebarRailCollapsed(true, { animate: false });
-    } else {
-      syncSidebarHoverPeekMode();
-    }
+  await restoreRecoveredPresentation();
+  const storedSidebarRailCollapsed = readSidebarRailCollapsed();
+  if (
+    hoverExpandSidebar ||
+    (storedSidebarRailCollapsed ?? state.roots.length === 0)
+  ) {
+    setSidebarRailCollapsed(true, { animate: false });
   } else {
     syncSidebarHoverPeekMode();
   }

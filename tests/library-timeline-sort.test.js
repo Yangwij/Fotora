@@ -7,6 +7,14 @@ const root = path.join(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "web", "app.js"), "utf8");
 const css = fs.readFileSync(path.join(root, "web", "styles.css"), "utf8");
 
+test("没有保存排序偏好时默认按最新到最旧显示", () => {
+  assert.match(app, /const DEFAULT_ITEM_SORT = "newest";/);
+  assert.match(
+    app,
+    /function readItemSort\(\)[\s\S]*?return normalizeItemSort\(localStorage\.getItem\(ITEM_SORT_KEY\)\);[\s\S]*?return DEFAULT_ITEM_SORT;/,
+  );
+});
+
 test("拖动滑块总开关与时间刻度显示逻辑相互独立", () => {
   const timeAware = app.slice(
     app.indexOf("function libraryTimelineUsesTime()"),
@@ -75,7 +83,19 @@ test("仅重复点击当前时间分段按钮时在底部与顶部之间切换",
     setMode,
     /if \(mode === state\.libraryTimelineMode\) \{\s*return toggleLibraryTimelineScrollEdge\(\);/,
   );
-  assert.match(toggleScroll, /top: goToBottom \? content\.scrollHeight : 0,/);
+  assert.match(
+    toggleScroll,
+    /const targetTop = goToBottom[\s\S]*?content\.scrollHeight - content\.clientHeight[\s\S]*?: 0;/,
+  );
+  assert.match(
+    toggleScroll,
+    /distance <= Math\.max\(320, content\.clientHeight \* 1\.5\)/,
+  );
+  assert.match(
+    toggleScroll,
+    /await preloadFirstScreenLowResPreviews\(targetItems\);[\s\S]*?content\.scrollTop = targetTop;/,
+  );
+  assert.match(toggleScroll, /seq !== libraryTimelineEdgeTravelSeq/);
   assert.match(
     toggleScroll,
     /libraryTimelineRepeatScrollEdge = goToBottom \? "top" : "bottom";/,

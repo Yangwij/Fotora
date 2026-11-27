@@ -22,8 +22,10 @@ const cssSource = fs.readFileSync(
   "utf8",
 );
 
-const POOL_START = "/* ---------------------- 缩略图解码缓存 ---------------------- */";
-const POOL_END = "/* ---------------------- 缩略图后台预生成 ---------------------- */";
+const POOL_START =
+  "/* ---------------------- 缩略图解码缓存 ---------------------- */";
+const POOL_END =
+  "/* ---------------------- 缩略图后台预生成 ---------------------- */";
 
 /** 抠出解码池那一段源码。两个标记都必须在，否则说明这段被挪走或改名了。 */
 function decodePoolSource() {
@@ -100,10 +102,12 @@ function fakeTile(img, { index = 0, video = false } = {}) {
  */
 function loadDecodePool({ deviceMemory = 8, thumbSize = 200 } = {}) {
   const source = decodePoolSource();
+  const sizeState = { value: thumbSize };
   const context = vm.createContext({
     navigator: { deviceMemory },
     state: { photoZoom: 3 },
-    galleryThumbSizeForZoom: () => thumbSize,
+    sizeState,
+    galleryThumbSizeForZoom: () => sizeState.value,
     galleryTileThumbSrc: (tile) => tile?.dataset?.thumbSrc || "",
     syncTileAspect: () => {},
     handleGalleryThumbError: () => {},
@@ -113,6 +117,7 @@ function loadDecodePool({ deviceMemory = 8, thumbSize = 200 } = {}) {
       THUMB_DECODE_POOL_BUDGET,
       THUMB_DECODE_POOL_MAX_ENTRIES,
       THUMB_PAINTED_URL_LIMIT,
+      thumbDecodeProtectedUrls,
       thumbDecodePoolBudgetBytes,
       thumbImageBytes,
       thumbImageKey,
@@ -130,9 +135,12 @@ function loadDecodePool({ deviceMemory = 8, thumbSize = 200 } = {}) {
       poolSize: () => thumbDecodePool.size,
       poolBytes: () => thumbDecodePoolBytes,
       poolKeys: () => [...thumbDecodePool.keys()],
+      setThumbSize: (value) => { sizeState.value = value; },
     };
   `;
-  vm.runInContext(source + exportsSource, context, { filename: "decode-pool.js" });
+  vm.runInContext(source + exportsSource, context, {
+    filename: "decode-pool.js",
+  });
   return context.__pool;
 }
 
@@ -142,13 +150,13 @@ test("解码池预算按机器内存收放，并夹在上下限之间", () => {
   const low = loadDecodePool({ deviceMemory: 2 });
   const mid = loadDecodePool({ deviceMemory: 8 });
   const high = loadDecodePool({ deviceMemory: 64 });
-  assert.equal(low.thumbDecodePoolBudgetBytes(), 48 * 1024 * 1024);
-  assert.equal(mid.thumbDecodePoolBudgetBytes(), 96 * 1024 * 1024);
-  assert.equal(high.thumbDecodePoolBudgetBytes(), 96 * 1024 * 1024);
+  assert.equal(low.thumbDecodePoolBudgetBytes(), 96 * 1024 * 1024);
+  assert.equal(mid.thumbDecodePoolBudgetBytes(), 192 * 1024 * 1024);
+  assert.equal(high.thumbDecodePoolBudgetBytes(), 192 * 1024 * 1024);
   /* 拿不到 deviceMemory（Safari / 隐私模式）时按 8GB 兜底，不能算出 0。 */
   assert.equal(
     loadDecodePool({ deviceMemory: undefined }).thumbDecodePoolBudgetBytes(),
-    96 * 1024 * 1024,
+    192 * 1024 * 1024,
   );
   assert.ok(low.THUMB_DECODE_POOL_BUDGET > 0);
 });
@@ -157,7 +165,10 @@ test("按内存预算淘汰：从最旧的一张开始丢，丢到预算内就�
   const pool = loadDecodePool();
   /* 每张 100×100×4 = 40000 字节。 */
   for (const index of [1, 2, 3, 4]) {
-    pool.thumbPoolKeep(`/thumb/${index}`, fakeImage({ src: `/thumb/${index}` }));
+    pool.thumbPoolKeep(
+      `/thumb/${index}`,
+      fakeImage({ src: `/thumb/${index}` }),
+    );
   }
   assert.equal(pool.poolBytes(), 160000);
   pool.thumbTrimDecodePool(90000);
@@ -179,6 +190,22 @@ test("最近领用过的会排到队尾，淘汰时不会先丢它", () => {
   /* 三张共 12 万字节，收到 8 万就先丢最旧的 /t/2；/t/1 因为刚被复用而活下来。 */
   assert.deepEqual([...pool.poolKeys()], ["/t/3", "/t/1"]);
   assert.equal(pool.poolBytes(), 80000);
+});
+
+test("最近稳定视野里的图优先躲过普通 LRU，但预算到极限时仍可回收", () => {
+  const pool = loadDecodePool();
+  for (const index of [1, 2, 3, 4]) {
+    const url = `/view/${index}`;
+    pool.thumbPoolKeep(url, fakeImage({ src: url }));
+    if (index === 1) pool.thumbDecodeProtectedUrls.add(url);
+  }
+  pool.thumbTrimDecodePool(90000);
+  assert.ok(pool.thumbPoolHas("/view/1"), "当前视野的图应先保住");
+  assert.deepEqual([...pool.poolKeys()], ["/view/1", "/view/4"]);
+
+  /* 保护区域自己就超标时，不能突破 4 万字节的内存上限。 */
+  pool.thumbTrimDecodePool(40000);
+  assert.equal(pool.poolBytes(), 40000);
 });
 
 test("最小档一格才几十 KB，只按内存收口会攒下上万个节点，所以还要按数量收", () => {
@@ -205,8 +232,14 @@ test("同一 URL 重复入池不会把字节记两遍", () => {
 
 test("内联占位图和没有尺寸的图不进池子：占内存又领不回去", () => {
   const pool = loadDecodePool();
-  pool.thumbPoolKeep("data:image/gif;base64,R0lGOD", fakeImage({ src: "data:image/gif;base64,R0lGOD" }));
-  pool.thumbPoolKeep("/broken", fakeImage({ src: "/broken", width: 0, height: 0 }));
+  pool.thumbPoolKeep(
+    "data:image/gif;base64,R0lGOD",
+    fakeImage({ src: "data:image/gif;base64,R0lGOD" }),
+  );
+  pool.thumbPoolKeep(
+    "/broken",
+    fakeImage({ src: "/broken", width: 0, height: 0 }),
+  );
   pool.thumbPoolKeep("", fakeImage({ src: "" }));
   assert.equal(pool.poolSize(), 0);
   assert.equal(pool.poolBytes(), 0);
@@ -222,13 +255,35 @@ test("丢掉一张要真的断开 src，浏览器才肯释放那份解码内存"
   assert.equal(pool.poolBytes(), 0);
 });
 
-/* ------------------------------ 换档作废 ------------------------------ */
+/* ------------------------------ 换档保留 ------------------------------ */
 
-test("换网格档位等于换一批 URL，整池作废", () => {
+test("换网格档位保留其他尺寸节点，回到原档位仍可领回同一张", () => {
   const source = decodePoolSource();
   assert.match(source, /function syncThumbDecodePoolZoomSize\(/);
-  assert.match(source, /thumbClearDecodePool\(\)/);
-  /* 接线点：换档入口必须调它，否则池子里全是旧尺寸的图，白占内存。 */
+  assert.doesNotMatch(
+    source,
+    /function syncThumbDecodePoolZoomSize\([\s\S]*?thumbClearDecodePool\(\)[\s\S]*?\n\}/,
+  );
+  const pool = loadDecodePool({ thumbSize: 400 });
+  const fourHundred = fakeImage({
+    src: "/api/thumb/7?size=400&fit=inside",
+  });
+  pool.thumbPoolKeep("/api/thumb/7?size=400&fit=inside", fourHundred);
+  pool.setThumbSize(200);
+  pool.syncThumbDecodePoolZoomSize(3);
+  assert.ok(pool.thumbPoolHas("/api/thumb/7?size=400&fit=inside"));
+  const twoHundred = fakeImage({
+    src: "/api/thumb/7?size=200&fit=inside",
+  });
+  pool.thumbPoolKeep("/api/thumb/7?size=200&fit=inside", twoHundred);
+  pool.setThumbSize(400);
+  pool.syncThumbDecodePoolZoomSize(4);
+  assert.equal(
+    pool.thumbPoolTake("/api/thumb/7?size=400&fit=inside"),
+    fourHundred,
+  );
+
+  /* 接线点：换档入口必须调用它，才能同步当前档位并执行统一 LRU。 */
   const quality = appSource.slice(
     appSource.indexOf("function setGalleryImageQuality("),
     appSource.indexOf("function setGalleryImageQuality(") + 2000,
@@ -249,7 +304,10 @@ test("格子被回收时把解码好的图摘下来交给池子，新格子直�
   assert.ok(donor.removed, "摘下来的图不该还挂在旧格子上");
   assert.equal(donorTile.querySelector(".crop > img"), null);
   assert.ok(pool.thumbPoolHas(url));
-  assert.ok(pool.thumbWasPainted(url), "进过池子的就算上过屏，之后不再重播入场动画");
+  assert.ok(
+    pool.thumbWasPainted(url),
+    "进过池子的就算上过屏，之后不再重播入场动画",
+  );
 
   /* 新格子先摆一张同 URL 的占位图，领用后应当被池子里那个节点整个换掉。 */
   const placeholder = fakeImage({ src: url, width: 0, height: 0 });
@@ -356,7 +414,10 @@ test("已经上过屏的缩略图直接免动画，不再走两帧 + 淡入", ()
   assert.match(warmPath, /classList\.add\("is-thumb-warm", "is-media-ready"\)/);
   assert.match(warmPath, /return;/);
   /* 冷路径要把免动画标记摘掉，否则真正需要骨架顶住时骨架不出现。 */
-  assert.match(body.slice(revealAt - 200, revealAt), /classList\.remove\("is-thumb-warm"\)/);
+  assert.match(
+    body.slice(revealAt - 200, revealAt),
+    /classList\.remove\("is-thumb-warm"\)/,
+  );
   /* 真正上屏那一刻才记账。 */
   assert.match(body, /thumbRememberPainted\(source\)/);
 });
@@ -373,12 +434,15 @@ test("换图时按新地址重判免动画：新地址自己上过屏才继续�
   const from = appSource.indexOf("function loadGalleryWindowImage(tile) {");
   assert.ok(from >= 0);
   const body = appSource.slice(from, from + 1500);
-  assert.match(body, /classList\.toggle\("is-thumb-warm", thumbWasPainted\(src\)\)/);
+  assert.match(
+    body,
+    /classList\.toggle\("is-thumb-warm", thumbWasPainted\(src\)\)/,
+  );
 });
 
 test("免动画只拿掉 opacity 过渡，transform 那一路必须留着做裁剪模式动画", () => {
   const warmImg = cssSource.match(
-    /\.photo-grid \.tile\.is-thumb-warm \.crop > img[^{]*\{([^}]*)\}/,
+    /\.photo-grid\s+\.tile\.is-thumb-warm\s+\.crop\s*>\s*img[^{]*\{([^}]*)\}/,
   );
   assert.ok(warmImg, "styles.css 里找不到 .is-thumb-warm 的图片规则");
   assert.ok(!/opacity/.test(warmImg[1]), "免动画时不该再对 opacity 做过渡");
@@ -421,7 +485,10 @@ test("滚动方向只在真滚动了才更新，两像素以内的抖动不算�
   /* 每帧滚动都要记一笔，否则缓冲区永远按旧方向摆。 */
   const from = appSource.indexOf("function handleGalleryContentScroll(");
   assert.ok(from >= 0);
-  assert.match(appSource.slice(from, from + 3000), /noteGalleryScrollDirection\(\)/);
+  assert.match(
+    appSource.slice(from, from + 3000),
+    /noteGalleryScrollDirection\(\)/,
+  );
 });
 
 /* ------------------------------ 提前解码 ------------------------------ */
@@ -433,7 +500,14 @@ test("提前解码只排当前档位那一批，尺寸对不上就整批不要",
   );
   assert.match(body, /size !== galleryThumbSizeForZoom\(\)/);
   assert.match(body, /THUMB_DECODE_AHEAD_LIMIT/);
-  assert.match(body, /thumbPoolHas\(url\) \|\| thumbDecodeAheadQueued\.has\(url\)/);
+  assert.match(
+    body,
+    /thumbPoolHas\(url\) \|\| thumbDecodeAheadQueued\.has\(url\)/,
+  );
+  /* 全库可以继续落盘，但解码队列只接受当前视野左右各约两屏。 */
+  assert.match(body, /galleryViewportIndexRange\(\)/);
+  assert.match(body, /THUMB_DECODE_AHEAD_VIEWPORT_RADIUS/);
+  assert.match(body, /index < first \|\| index > last/);
 });
 
 test("解码让路给可见区：查看器、导入、换档动画、正在滚动时都不抢主线程", () => {
@@ -456,7 +530,10 @@ test("解码让路给可见区：查看器、导入、换档动画、正在滚�
 });
 
 test("落盘的那一批接着排进提前解码，滚动时先静默一会儿", () => {
-  assert.match(appSource, /queueThumbDecodeAhead\(batch\.items, thumbPrefetchSize\)/);
+  assert.match(
+    appSource,
+    /queueThumbDecodeAhead\(batch\.items, thumbPrefetchSize\)/,
+  );
   const note = appSource.slice(
     appSource.indexOf("function noteThumbPrefetchScroll() {"),
     appSource.indexOf("function stopThumbPrefetch() {"),
@@ -470,12 +547,35 @@ test("落盘的那一批接着排进提前解码，滚动时先静默一会儿",
   assert.match(stop, /stopThumbDecodeAhead\(\)/);
 });
 
+test("拖动大跳时清掉中间位置，滚动停稳后立即重排", () => {
+  const retarget = appSource.slice(
+    appSource.indexOf("function retargetThumbPrefetch("),
+    appSource.indexOf("async function runThumbPrefetchTick("),
+  );
+  assert.match(retarget, /stopThumbDecodeAhead\(\)/);
+  assert.match(retarget, /settled\s*\?\s*0\s*:/);
+  assert.match(retarget, /if \(settled\) thumbPrefetchScrollDirty = false;/);
+
+  const scrollEnd = appSource.slice(
+    appSource.indexOf("function handleGalleryContentScroll("),
+    appSource.indexOf('$("#content").addEventListener("scroll"'),
+  );
+  assert.match(scrollEnd, /rememberThumbDecodeViewport\(\)/);
+  assert.match(scrollEnd, /retargetThumbPrefetch\(\{ settled: true \}\)/);
+  assert.match(scrollEnd, /scheduleThumbPrefetch\(0\)/);
+});
+
 test("切到后台时停下解码并把池子收到四分之一，内存先还给系统", () => {
-  const from = appSource.indexOf('document.addEventListener("visibilitychange"');
+  const from = appSource.indexOf(
+    'document.addEventListener("visibilitychange"',
+  );
   assert.ok(from >= 0);
   const body = appSource.slice(from, from + 900);
   assert.match(body, /stopThumbDecodeAhead\(\)/);
-  assert.match(body, /thumbTrimDecodePool\(Math\.floor\(THUMB_DECODE_POOL_BUDGET \/ 4\)\)/);
+  assert.match(
+    body,
+    /thumbTrimDecodePool\(Math\.floor\(THUMB_DECODE_POOL_BUDGET \/ 4\)\)/,
+  );
   assert.match(body, /armThumbPrefetch\(\{ force: true \}\)/);
 });
 
@@ -488,7 +588,10 @@ test("切视图的缓存按字节收口，不按格子数", () => {
   );
   assert.match(cache, /contentThumbDecodedBytes\(content\)/);
   assert.match(cache, /bytes > CONTENT_VIEW_CACHE_MAX_BYTES/);
-  assert.match(cache, /contentViewCache\.set\(descriptor\.key, \{ fragment, bytes \}\)/);
+  assert.match(
+    cache,
+    /contentViewCache\.set\(descriptor\.key, \{ fragment, bytes \}\)/,
+  );
   /* 最小档一屏能有上千格，按格子数卡会把最常见的情况直接拒掉。 */
   assert.ok(!/CONTENT_VIEW_CACHE_MAX_TILES/.test(appSource));
 
@@ -510,14 +613,17 @@ test("领用必须等格子进了真文档：<template> 的内容文档不是完
   const appendAt = body.indexOf("grid.append(template.content)");
   const adoptAt = body.indexOf("adoptThumbDecodeImage(tile)");
   assert.ok(appendAt > 0, "找不到把新格子挂进网格的那一步");
-  assert.ok(adoptAt > appendAt, "领用必须在 grid.append 之后，否则加载会被作废");
-  /* 领来的节点不会再触发 onload，得自己补一次就绪同步。 */
-  assert.match(
-    body.slice(adoptAt, adoptAt + 400),
-    /syncTileAspect\(img\)/,
+  assert.ok(
+    adoptAt > appendAt,
+    "领用必须在 grid.append 之后，否则加载会被作废",
   );
+  /* 领来的节点不会再触发 onload，得自己补一次就绪同步。 */
+  assert.match(body.slice(adoptAt, adoptAt + 400), /syncTileAspect\(img\)/);
   /* 回收要在 remove 之前，节点摘走了就再也拿不到那张图了。 */
   const donateAt = body.indexOf("donateThumbDecodeImage(tile)");
   const removeAt = body.indexOf("tile.remove()", donateAt);
-  assert.ok(donateAt > 0 && removeAt > donateAt, "回收必须在 tile.remove() 之前");
+  assert.ok(
+    donateAt > 0 && removeAt > donateAt,
+    "回收必须在 tile.remove() 之前",
+  );
 });

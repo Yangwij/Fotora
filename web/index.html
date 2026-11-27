@@ -22,6 +22,11 @@
     <title>Fotora</title>
     <script>
       (() => {
+        if (
+          new URLSearchParams(location.search).get("fotora_recover") === "1"
+        ) {
+          document.documentElement.classList.add("app-recovering");
+        }
         try {
           const stored = localStorage.getItem("color-mode");
           const mode =
@@ -146,7 +151,6 @@
         type="button"
         data-window-action="toggle-fullscreen"
         aria-label="切换全屏（Ctrl+0）"
-        title="切换全屏（Ctrl+0）"
       >
         <span class="ctrl-zero-key" aria-hidden="true">
           <svg class="ctrl-zero-icon" viewBox="0 0 18 18" fill="none">
@@ -181,7 +185,6 @@
           type="button"
           data-window-action="minimize"
           aria-label="最小化窗口"
-          title="最小化"
         >
           <span aria-hidden="true"></span>
         </button>
@@ -190,7 +193,6 @@
           type="button"
           data-window-action="toggle-maximize"
           aria-label="最大化窗口"
-          title="最大化"
         >
           <span aria-hidden="true"></span>
         </button>
@@ -199,7 +201,6 @@
           type="button"
           data-window-action="close"
           aria-label="关闭窗口"
-          title="关闭"
         >
           <span aria-hidden="true"></span>
         </button>
@@ -214,7 +215,6 @@
           type="button"
           data-window-action="minimize"
           aria-label="最小化窗口"
-          title="最小化"
         >
           <svg
             class="window-control-minimize"
@@ -229,7 +229,6 @@
           type="button"
           data-window-action="toggle-maximize"
           aria-label="最大化窗口"
-          title="最大化"
         >
           <svg
             class="window-control-maximize"
@@ -264,7 +263,6 @@
           type="button"
           data-window-action="close"
           aria-label="关闭窗口"
-          title="关闭"
         >
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <path
@@ -636,7 +634,7 @@
         >
           <iframe
             id="locationsMapFrame"
-            title="地点地图"
+            aria-label="地点地图"
             data-src="/map/locations.html"
           ></iframe>
           <nav
@@ -691,7 +689,7 @@
         >
           <iframe
             id="albumMapFrame"
-            title="相簿地图"
+            aria-label="相簿地图"
             data-src="/map/album-map.html"
           ></iframe>
           <button
@@ -700,7 +698,6 @@
             type="button"
             hidden
             aria-label="应用位置并继续下一张"
-            title="应用位置并继续下一张"
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M4.2 10.2 8 14l7.8-8" />
@@ -929,7 +926,7 @@
             <div class="metadata-location-map" id="metadataLocationMap">
               <iframe
                 id="metadataLocationMapFrame"
-                title="地点地图"
+                aria-label="地点地图"
                 data-src="/map/index.html"
               ></iframe>
               <div
@@ -1136,7 +1133,7 @@
       >
         <iframe
           id="contextMapPrewarmFrame"
-          title="项目位置预览准备区"
+          aria-label="项目位置预览准备区"
           tabindex="-1"
         ></iframe>
       </div>
@@ -1511,6 +1508,22 @@
         <p id="slideshowDateRange"></p>
       </div>
       <div class="slideshow-top-controls" id="slideshowTopControls">
+        <button
+          class="slideshow-round-button slideshow-close"
+          id="slideshowClose"
+          type="button"
+          aria-label="关闭幻灯片"
+        >
+          <svg viewBox="0 0 18 18" aria-hidden="true">
+            <path
+              d="M4 4l10 10M14 4 4 14"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.8"
+              stroke-linecap="round"
+            />
+          </svg>
+        </button>
         <div class="slideshow-settings-anchor">
           <button
             class="slideshow-round-button slideshow-settings-button"
@@ -1650,22 +1663,6 @@
             </div>
           </div>
         </div>
-        <button
-          class="slideshow-round-button slideshow-close"
-          id="slideshowClose"
-          type="button"
-          aria-label="关闭幻灯片"
-        >
-          <svg viewBox="0 0 18 18" aria-hidden="true">
-            <path
-              d="M4 4l10 10M14 4 4 14"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-            />
-          </svg>
-        </button>
       </div>
       <div class="slideshow-bottom-controls" id="slideshowBottomControls">
         <span class="slideshow-counter" id="slideshowCounter"></span>
@@ -1888,7 +1885,8 @@
               ><span class="shortcut-keys"><kbd>Z</kbd></span>
             </div>
             <div class="shortcut-row">
-              <span title="仅在开启分类评级时可用，按 0～5 设置分类。"
+              <span
+                aria-description="仅在开启分类评级时可用，按 0～5 设置分类。"
                 >分类评级</span
               ><span class="shortcut-keys"><kbd>0～5</kbd></span>
             </div>

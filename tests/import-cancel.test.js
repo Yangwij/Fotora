@@ -27,7 +27,23 @@ function postJson(address, requestPath, body) {
   });
 }
 
-test("取消后台导入会移除新图库并恢复导入前的图库", async (t) => {
+async function waitForScan(address, rootId, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await fetch(
+      `${address}/api/scan?rootId=${encodeURIComponent(rootId)}`,
+    );
+    const scan = await response.json();
+    if (scan.running) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      continue;
+    }
+    return scan;
+  }
+  throw new Error("扫描没有在限定时间内结束");
+}
+
+test("后台导入不提前换库；取消恢复旧库，完成后才激活新库", async (t) => {
   await fsp.mkdir(existingLibrary, { recursive: true });
   await fsp.mkdir(incomingLibrary, { recursive: true });
   await fsp.writeFile(path.join(existingLibrary, "existing.jpg"), "photo");
@@ -58,6 +74,11 @@ test("取消后台导入会移除新图库并恢复导入前的图库", async (t
   assert.equal(started.background, true);
   assert.ok(started.importId);
   assert.notEqual(started.root.id, existingRoot.id);
+  assert.equal(
+    started.state.activeRootId,
+    existingRoot.id,
+    "扫描期间服务端必须继续使用旧图库",
+  );
 
   const cancelResponse = await postJson(address, "/api/imports/cancel", {
     importId: started.importId,
@@ -74,6 +95,31 @@ test("取消后台导入会移除新图库并恢复导入前的图库", async (t
     lib.listRoots().some((root) => root.id === started.root.id),
     false,
   );
+
+  const secondResponse = await postJson(address, "/api/roots", {
+    path: incomingLibrary,
+    background: true,
+  });
+  const second = await secondResponse.json();
+  assert.equal(secondResponse.status, 200);
+  assert.equal(second.state.activeRootId, existingRoot.id);
+  const scan = await waitForScan(address, second.root.id);
+  assert.equal(scan.browsable, true);
+  assert.match(scan.phase, /^(browsable|done)$/);
+  assert.equal(
+    lib.getMeta("active_root_id"),
+    String(existingRoot.id),
+    "扫描完成但前端尚未允许切换时，活动图库仍应保持旧库",
+  );
+
+  const completeResponse = await postJson(address, "/api/imports/complete", {
+    importId: second.importId,
+    rootId: second.root.id,
+  });
+  const completed = await completeResponse.json();
+  assert.equal(completeResponse.status, 200);
+  assert.equal(completed.ok, true);
+  assert.equal(completed.state.activeRootId, second.root.id);
 });
 
 test("导入底栏只在任务期间显示取消入口", () => {
